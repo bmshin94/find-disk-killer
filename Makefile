@@ -24,6 +24,7 @@ lint:
 	plutil -lint Sources/FindDiskKillerApp/Resources/PrivacyInfo.xcprivacy
 	@for file in Sources/FindDiskKillerApp/Resources/*.lproj/Localizable.strings; do plutil -lint "$$file"; done
 	bash -n scripts/create-dmg.sh scripts/prepare-claude-cleanup-runtime.sh scripts/release.sh scripts/verify-release.sh scripts/verify-installed-trace-helper.sh
+	xcrun swiftc -typecheck scripts/generate-app-icon.swift
 	xcrun swiftc -typecheck scripts/render-dmg-background.swift
 
 release:
