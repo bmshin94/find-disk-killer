@@ -55,4 +55,5 @@ jobs:
             plutil -lint "$file"
           done
           bash -n scripts/create-dmg.sh scripts/prepare-claude-cleanup-runtime.sh scripts/release.sh scripts/verify-release.sh
+          xcrun swiftc -typecheck scripts/generate-app-icon.swift
           xcrun swiftc -typecheck scripts/render-dmg-background.swift
