@@ -25,7 +25,7 @@ public enum StorageSourceCatalog {
         .init(id: .codex, title: "Codex", family: .aiTools, symbol: "terminal", cleanupCapability: .verifiedFiles),
         .init(id: .claude, title: "Claude", family: .aiTools, symbol: "sparkles", cleanupCapability: .verifiedFiles),
         .init(id: .openCode, title: "OpenCode", family: .aiTools, symbol: "curlybraces", cleanupCapability: .analysisOnly),
-        .init(id: .workspace, title: "Git Workspaces", family: .workspaces, symbol: "folder.badge.gearshape", cleanupCapability: .analysisOnly)
+        .init(id: .workspace, title: "Git Workspaces", family: .workspaces, symbol: "arrow.triangle.branch", cleanupCapability: .analysisOnly)
     ]
 
     public static func descriptor(for id: StorageSourceID) -> StorageSourceDescriptor? {

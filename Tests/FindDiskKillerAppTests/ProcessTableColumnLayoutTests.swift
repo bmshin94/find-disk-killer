@@ -163,6 +163,36 @@ private func warningSample(_ offset: TimeInterval, _ value: Double?, segment: In
     #expect(abs(resolved.tableWidth - 1_600) < 0.001)
 }
 
+@Test func processTableCoalescesSmallViewportChangesDuringLiveResize() {
+    var coalescer = ProcessTableViewportWidthCoalescer()
+
+    #expect(coalescer.reportableWidth(1_000, isWindowLiveResizing: true) == 1_000)
+    #expect(coalescer.reportableWidth(1_004, isWindowLiveResizing: true) == nil)
+    #expect(coalescer.reportableWidth(1_008, isWindowLiveResizing: true) == 1_008)
+    #expect(coalescer.reportableWidth(1_011, isWindowLiveResizing: true) == nil)
+}
+
+@Test func processTableReportsTheExactViewportWhenLiveResizeEnds() {
+    var coalescer = ProcessTableViewportWidthCoalescer()
+
+    #expect(coalescer.reportableWidth(1_000, isWindowLiveResizing: true) == 1_000)
+    #expect(coalescer.reportableWidth(1_003, isWindowLiveResizing: true) == nil)
+    #expect(coalescer.reportableWidth(
+        1_003,
+        isWindowLiveResizing: false,
+        force: true
+    ) == 1_003)
+    #expect(coalescer.lastReportedWidth == 1_003)
+}
+
+@Test func processTableViewportCoalescerRejectsInvalidWidths() {
+    var coalescer = ProcessTableViewportWidthCoalescer()
+
+    #expect(coalescer.reportableWidth(0, isWindowLiveResizing: false) == nil)
+    #expect(coalescer.reportableWidth(.infinity, isWindowLiveResizing: false) == nil)
+    #expect(coalescer.reportableWidth(.nan, isWindowLiveResizing: false) == nil)
+}
+
 @MainActor
 @Test func activeAppsDefaultSortIsCurrentWriteDescending() {
     #expect(ProcessTable.defaultSortKey == .writeCurrent)

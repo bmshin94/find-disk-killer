@@ -2,7 +2,7 @@ import AppKit
 import FindDiskKillerCore
 import SwiftUI
 
-private enum StorageMapScope: String, CaseIterable, Identifiable {
+enum StorageMapScope: String, CaseIterable, Identifiable {
     case all
     case applications
     case developerTools
@@ -73,7 +73,7 @@ enum StorageMapOverviewPresentation: Equatable {
     }
 }
 
-private struct StorageMapSourcePresentation: Identifiable {
+struct StorageMapSourcePresentation: Identifiable {
     let candidate: StorageSourceCandidate
     let result: StorageSourceResult?
     let resultRevision: UInt64
@@ -177,33 +177,38 @@ struct StorageMapView: View {
                     )
                     .transition(.opacity)
                 case .analysis:
-                    ScrollView {
-                        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                            StorageMapSummaryBand(
-                                model: model,
-                                isAgentScanning: agentStorage.isScanning,
-                                safeCleanupBytes: overviewCleanupIndex.totalBytes,
-                                hasSafeCleanup: !overviewCleanupIndex.groups.isEmpty,
-                                startAnalysis: startFullAnalysis,
-                                stopAnalysis: stopFullAnalysis,
-                                openSafeCleanup: { route = .safeCleanup }
-                            )
-                            Divider()
-                            Section {
-                                sourceWorkspace(width: proxy.size.width)
-                            } header: {
-                                VStack(spacing: 0) {
-                                    scopeBar
-                                    Divider()
-                                }
-                                .background(InstrumentDesign.Palette.canvas)
-                            }
-                        }
+                    if proxy.size.width >= 560 {
+                        StorageMapDashboardView(
+                            scope: $scope,
+                            items: visibleItems,
+                            volumes: model.presentationVolumes,
+                            analyzedBytes: model.presentationTotalAllocatedBytes,
+                            entryCount: model.presentationEntryCount,
+                            scannedAt: model.snapshot?.scannedAt,
+                            completedSourceCount: model.progress?.completedSourceCount,
+                            totalSourceCount: model.progress?.totalSourceCount,
+                            safeCleanupBytes: overviewCleanupIndex.totalBytes,
+                            safeCleanupBytesBySource: safeCleanupBytesBySource,
+                            isAnalysisRunning: isFullAnalysisRunning,
+                            isStopping: model.phase == .stopping,
+                            canAnalyze: model.phase != .detecting
+                                && model.phase != .stopping
+                                && !model.candidates.isEmpty,
+                            openAvailability: resultAccess,
+                            unavailableMessage: unavailableMessage,
+                            canReanalyze: canReanalyze,
+                            openSource: openSource,
+                            reanalyze: reanalyze,
+                            startAnalysis: startFullAnalysis,
+                            stopAnalysis: stopFullAnalysis,
+                            openSafeCleanup: { route = .safeCleanup }
+                        )
+                        .transition(.opacity)
+                    } else {
+                        minimumWidthNotice
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .transition(.opacity)
                     }
-                    .scrollIndicators(.visible)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .transition(.opacity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -313,6 +318,12 @@ struct StorageMapView: View {
 
     private var hasSafeCleanupForOverview: Bool {
         !overviewCleanupIndex.groups.isEmpty
+    }
+
+    private var safeCleanupBytesBySource: [StorageSourceID: UInt64] {
+        Dictionary(uniqueKeysWithValues: overviewCleanupIndex.groups.map {
+            ($0.id, $0.totalBytes)
+        })
     }
 
     private var safeCleanupValueForOverview: String {
@@ -1303,7 +1314,7 @@ private struct StorageSourceWorkbenchRow: View {
 }
 
 @MainActor
-private struct StorageSourceBrandIcon: View {
+struct StorageSourceBrandIcon: View {
     let sourceID: StorageSourceID
     let fallbackSymbol: String
 
@@ -3476,7 +3487,7 @@ private extension UInt64 {
     }
 }
 
-private extension StorageSourceFamily {
+extension StorageSourceFamily {
     var title: String {
         switch self {
         case .applications: L10n.text("应用与浏览器")

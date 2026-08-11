@@ -63,40 +63,32 @@ struct ProcessesPageHeader: View {
 
     var body: some View {
         InstrumentPageHeader("应用") {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    rangeControl(width: 260)
-                    processSearchField(width: 240)
-                    EvidenceLabel(
-                        text: "I/O · CPU · 网络 · 当前用户可见",
-                        symbol: "person.crop.circle.badge.checkmark"
-                    )
-                }
-
-                HStack(spacing: 10) {
-                    rangeControl(width: 250)
-                    processSearchField(width: 220)
-                }
-
-                HStack(spacing: 8) {
-                    rangeControl(width: 210)
-                    processSearchField(width: 170)
-                }
+            HStack(spacing: 12) {
+                rangeControl
+                    .frame(minWidth: 210, idealWidth: 260, maxWidth: 260)
+                    .layoutPriority(2)
+                processSearchField
+                    .frame(minWidth: 170, idealWidth: 240, maxWidth: 240)
+                    .layoutPriority(1)
+                EvidenceLabel(
+                    text: "I/O · CPU · 网络 · 当前用户可见",
+                    symbol: "person.crop.circle.badge.checkmark"
+                )
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    private func rangeControl(width: CGFloat) -> some View {
+    private var rangeControl: some View {
         GlassSegmentedControl("时间范围", selection: $selectedRange) {
             ForEach(SampleRange.allCases) { range in
                 Text(range.localizedTitle).tag(range)
             }
         }
-        .frame(width: width)
         .accessibilityLabel(L10n.text("时间范围"))
     }
 
-    private func processSearchField(width: CGFloat) -> some View {
+    private var processSearchField: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
@@ -119,7 +111,7 @@ struct ProcessesPageHeader: View {
             }
         }
         .padding(.horizontal, 9)
-        .frame(width: width, height: 28)
+        .frame(height: 28)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
         .overlay {
             RoundedRectangle(cornerRadius: 7)
