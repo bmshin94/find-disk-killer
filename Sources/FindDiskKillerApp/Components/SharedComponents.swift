@@ -1586,19 +1586,10 @@ struct InstrumentPageHeader<Trailing: View>: View {
     }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: InstrumentPageHeaderLayout.wideSpacing) {
-                titleBlock
-                    .fixedSize(horizontal: true, vertical: false)
-                Spacer(minLength: 12)
-                trailing()
-            }
-
-            VStack(alignment: .leading, spacing: InstrumentPageHeaderLayout.compactSpacing) {
-                titleBlock
-                trailing()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        InstrumentPageHeaderResponsiveLayout() {
+            titleBlock
+                .fixedSize(horizontal: true, vertical: false)
+            trailing()
         }
         .frame(
             maxWidth: .infinity,
@@ -1625,6 +1616,110 @@ struct InstrumentPageHeader<Trailing: View>: View {
                     .minimumScaleFactor(0.8)
             }
         }
+    }
+}
+
+struct InstrumentPageHeaderResponsiveLayout: Layout {
+    struct Cache {
+        var titleSize: CGSize
+        var trailingSize: CGSize
+    }
+
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache(
+            titleSize: idealSize(at: 0, in: subviews),
+            trailingSize: idealSize(at: 1, in: subviews)
+        )
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache.titleSize = idealSize(at: 0, in: subviews)
+        cache.trailingSize = idealSize(at: 1, in: subviews)
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Cache
+    ) -> CGSize {
+        let contentWidth = cache.titleSize.width
+            + InstrumentPageHeaderLayout.wideSpacing
+            + cache.trailingSize.width
+        let availableWidth = proposal.width ?? contentWidth
+
+        if Self.usesHorizontalLayout(
+            availableWidth: availableWidth,
+            titleWidth: cache.titleSize.width,
+            trailingWidth: cache.trailingSize.width
+        ) {
+            return CGSize(
+                width: availableWidth,
+                height: max(cache.titleSize.height, cache.trailingSize.height)
+            )
+        }
+
+        return CGSize(
+            width: availableWidth,
+            height: cache.titleSize.height
+                + InstrumentPageHeaderLayout.compactSpacing
+                + cache.trailingSize.height
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Cache
+    ) {
+        guard subviews.count >= 2 else { return }
+        let isHorizontal = Self.usesHorizontalLayout(
+            availableWidth: bounds.width,
+            titleWidth: cache.titleSize.width,
+            trailingWidth: cache.trailingSize.width
+        )
+
+        if isHorizontal {
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.midY),
+                anchor: .leading,
+                proposal: ProposedViewSize(cache.titleSize)
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.maxX, y: bounds.midY),
+                anchor: .trailing,
+                proposal: ProposedViewSize(cache.trailingSize)
+            )
+        } else {
+            subviews[0].place(
+                at: bounds.origin,
+                anchor: .topLeading,
+                proposal: ProposedViewSize(cache.titleSize)
+            )
+            subviews[1].place(
+                at: CGPoint(
+                    x: bounds.minX,
+                    y: bounds.minY
+                        + cache.titleSize.height
+                        + InstrumentPageHeaderLayout.compactSpacing
+                ),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: cache.trailingSize.height)
+            )
+        }
+    }
+
+    static func usesHorizontalLayout(
+        availableWidth: CGFloat,
+        titleWidth: CGFloat,
+        trailingWidth: CGFloat
+    ) -> Bool {
+        titleWidth + InstrumentPageHeaderLayout.wideSpacing + trailingWidth <= availableWidth
+    }
+
+    private func idealSize(at index: Int, in subviews: Subviews) -> CGSize {
+        guard subviews.indices.contains(index) else { return .zero }
+        return subviews[index].sizeThatFits(.unspecified)
     }
 }
 

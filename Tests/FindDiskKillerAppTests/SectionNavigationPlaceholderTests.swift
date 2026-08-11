@@ -39,6 +39,23 @@ import Testing
     #expect(InstrumentPageHeaderLayout.wideSpacing == 18)
 }
 
+@Test func pageHeaderUsesOneRowWhenItsCachedIdealContentFits() {
+    #expect(
+        InstrumentPageHeaderResponsiveLayout.usesHorizontalLayout(
+            availableWidth: 820,
+            titleWidth: 72,
+            trailingWidth: 730
+        )
+    )
+    #expect(
+        !InstrumentPageHeaderResponsiveLayout.usesHorizontalLayout(
+            availableWidth: 819,
+            titleWidth: 72,
+            trailingWidth: 730
+        )
+    )
+}
+
 @Test func agentStorageOwnsItsOnlyToolbarActivityControl() {
     #expect(!AppSection.agentStorage.showsMonitoringToolbar)
     #expect(AppSection.overview.showsMonitoringToolbar)

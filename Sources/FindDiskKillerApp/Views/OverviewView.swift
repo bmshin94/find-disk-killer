@@ -1380,6 +1380,7 @@ struct ProcessTable: View {
     var isLoading = false
     var emptyStateTitle: String?
     var emptyStateSymbol = "waveform.path.ecg"
+    @Environment(\.isWindowLiveResizing) private var isWindowLiveResizing
     @State private var sortKey: ProcessSortKey = Self.defaultSortKey
     @State private var ascending = Self.defaultSortAscending
     @State private var columnWidths = ProcessColumnWidths.load()
@@ -1418,37 +1419,40 @@ struct ProcessTable: View {
     }
 
     var body: some View {
+        let displayedColumnWidths = columnWidths.adapted(to: availableTableWidth)
+
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
                 ScrollView(scrollAxes) {
                     VStack(spacing: 0) {
-                        processColumns(isHeader: true)
+                        processColumns(widths: displayedColumnWidths, isHeader: true)
                             .padding(.horizontal, 14)
                             .frame(height: ProcessTableLayoutContract.headerHeight)
                             .id(Self.topAnchorID)
                         Divider()
 
                         if isLoading, cachedVisibleRows.isEmpty {
-                            loadingRows
+                            loadingRows(widths: displayedColumnWidths)
                         } else if cachedVisibleRows.isEmpty {
                             ContentUnavailableView(
                                 emptyStateTitle ?? L10n.text("正在建立应用基线"),
                                 systemImage: emptyStateSymbol
                             )
-                                .frame(width: tableWidth)
+                                .frame(width: displayedColumnWidths.tableWidth)
                                 .frame(minHeight: 180)
                         } else {
                             VStack(spacing: 0) {
                                 ForEach(cachedVisibleRows) { row in
-                                    activeRow(row)
+                                    activeRow(row, widths: displayedColumnWidths)
                                     Divider().padding(.leading, 8)
                                 }
                             }
                         }
                     }
-                    .frame(width: tableWidth, alignment: .leading)
+                    .frame(width: displayedColumnWidths.tableWidth, alignment: .leading)
                     .background {
                         ProcessTableScrollObserver(
+                            isWindowLiveResizing: isWindowLiveResizing,
                             onStart: hoverCoordinator.scrollingStarted,
                             onEnd: finishScrolling,
                             onViewportWidth: updateAvailableTableWidth
@@ -1572,14 +1576,17 @@ struct ProcessTable: View {
     }
 
     @ViewBuilder
-    private func activeRow(_ row: ProcessTableRowPresentation) -> some View {
+    private func activeRow(
+        _ row: ProcessTableRowPresentation,
+        widths: ProcessColumnWidths
+    ) -> some View {
         switch row {
         case let .process(presentation):
             let process = presentation.process
             Button {
                 select(process)
             } label: {
-                processColumns(presentation)
+                processColumns(presentation, widths: widths)
                     .padding(.horizontal, 14)
                     .frame(height: ProcessTableLayoutContract.rowHeight)
                     .contentShape(Rectangle())
@@ -1605,7 +1612,7 @@ struct ProcessTable: View {
             Button {
                 isSystemLayerExplanationPresented.toggle()
             } label: {
-                systemLayerColumns(presentation)
+                systemLayerColumns(presentation, widths: widths)
                     .padding(.horizontal, 14)
                     .frame(height: ProcessTableLayoutContract.rowHeight)
                     .contentShape(Rectangle())
@@ -1622,31 +1629,35 @@ struct ProcessTable: View {
         }
     }
 
-    private func processColumns(isHeader: Bool = false) -> some View {
-        let widths = displayedColumnWidths
-        return HStack(spacing: 0) {
+    private func processColumns(
+        widths: ProcessColumnWidths,
+        isHeader: Bool = false
+    ) -> some View {
+        HStack(spacing: 0) {
             sortButton("应用", key: .name, width: widths[.application])
-            resizeHandle(after: .application)
+            resizeHandle(after: .application, widths: widths)
             sortButton("CPU · 5 秒", key: .cpuCurrent, width: widths[.cpu])
-            resizeHandle(after: .cpu)
+            resizeHandle(after: .cpu, widths: widths)
             sortButton("写入总量", key: .writeTotal, width: widths[.writeTotal])
-            resizeHandle(after: .writeTotal)
+            resizeHandle(after: .writeTotal, widths: widths)
             sortButton("当前写入", key: .writeCurrent, width: widths[.writeCurrent])
-            resizeHandle(after: .writeCurrent)
+            resizeHandle(after: .writeCurrent, widths: widths)
             sortButton("写入峰值", key: .writePeak, width: widths[.writePeak])
-            resizeHandle(after: .writePeak)
+            resizeHandle(after: .writePeak, widths: widths)
             sortButton("下载平均", key: .networkDownload, width: widths[.networkDownload])
-            resizeHandle(after: .networkDownload)
+            resizeHandle(after: .networkDownload, widths: widths)
             sortButton("上传平均", key: .networkUpload, width: widths[.networkUpload])
-            resizeHandle(after: .networkUpload)
+            resizeHandle(after: .networkUpload, widths: widths)
         }
         .font(.caption.weight(isHeader ? .semibold : .regular))
         .foregroundStyle(.secondary)
     }
 
-    private func processColumns(_ presentation: ProcessRowPresentation) -> some View {
-        let widths = displayedColumnWidths
-        return HStack(spacing: 0) {
+    private func processColumns(
+        _ presentation: ProcessRowPresentation,
+        widths: ProcessColumnWidths
+    ) -> some View {
+        HStack(spacing: 0) {
             HStack(spacing: 9) {
                 ProcessIcon(process: presentation.process, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
@@ -1678,9 +1689,11 @@ struct ProcessTable: View {
         .font(.callout)
     }
 
-    private func systemLayerColumns(_ presentation: SystemLayerRowPresentation) -> some View {
-        let widths = displayedColumnWidths
-        return HStack(spacing: 0) {
+    private func systemLayerColumns(
+        _ presentation: SystemLayerRowPresentation,
+        widths: ProcessColumnWidths
+    ) -> some View {
+        HStack(spacing: 0) {
             HStack(spacing: 9) {
                 Image(systemName: "internaldrive")
                     .font(.system(size: 13, weight: .semibold))
@@ -1721,10 +1734,10 @@ struct ProcessTable: View {
             .foregroundStyle(value == nil ? .secondary : .primary)
     }
 
-    private var loadingRows: some View {
+    private func loadingRows(widths: ProcessColumnWidths) -> some View {
         VStack(spacing: 0) {
             ForEach(0..<ProcessTableLayoutContract.loadingRowCount, id: \.self) { _ in
-                loadingProcessColumns
+                loadingProcessColumns(widths: widths)
                     .padding(.horizontal, 14)
                     .frame(height: ProcessTableLayoutContract.rowHeight)
                 Divider().padding(.leading, 8)
@@ -1735,9 +1748,8 @@ struct ProcessTable: View {
         .accessibilityHidden(true)
     }
 
-    private var loadingProcessColumns: some View {
-        let widths = displayedColumnWidths
-        return HStack(spacing: 0) {
+    private func loadingProcessColumns(widths: ProcessColumnWidths) -> some View {
+        HStack(spacing: 0) {
             HStack(spacing: 9) {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(.quaternary)
@@ -1781,21 +1793,16 @@ struct ProcessTable: View {
         Color.clear.frame(width: ProcessColumn.resizeHandleWidth)
     }
 
-    private func resizeHandle(after column: ProcessColumn) -> some View {
+    private func resizeHandle(
+        after column: ProcessColumn,
+        widths: ProcessColumnWidths
+    ) -> some View {
         ProcessColumnResizeHandle(
-            width: displayedColumnWidths[column],
+            width: widths[column],
             limits: column.limits,
             onChange: { columnWidths[column] = $0 },
             onEnd: { columnWidths.save() }
         )
-    }
-
-    private var tableWidth: CGFloat {
-        displayedColumnWidths.tableWidth
-    }
-
-    private var displayedColumnWidths: ProcessColumnWidths {
-        columnWidths.adapted(to: availableTableWidth)
     }
 
     private func sortButton(
@@ -2052,13 +2059,37 @@ struct ProcessTable: View {
 
 }
 
+struct ProcessTableViewportWidthCoalescer {
+    static let liveResizeThreshold: CGFloat = 8
+
+    private(set) var lastReportedWidth: CGFloat?
+
+    mutating func reportableWidth(
+        _ width: CGFloat,
+        isWindowLiveResizing: Bool,
+        force: Bool = false
+    ) -> CGFloat? {
+        guard width.isFinite, width > 0 else { return nil }
+        let threshold = isWindowLiveResizing ? Self.liveResizeThreshold : 0.5
+        if !force,
+           let lastReportedWidth,
+           abs(width - lastReportedWidth) < threshold {
+            return nil
+        }
+        lastReportedWidth = width
+        return width
+    }
+}
+
 private struct ProcessTableScrollObserver: NSViewRepresentable {
+    let isWindowLiveResizing: Bool
     let onStart: @MainActor () -> Void
     let onEnd: @MainActor () -> Void
     let onViewportWidth: @MainActor (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
+            isWindowLiveResizing: isWindowLiveResizing,
             onStart: onStart,
             onEnd: onEnd,
             onViewportWidth: onViewportWidth
@@ -2073,6 +2104,7 @@ private struct ProcessTableScrollObserver: NSViewRepresentable {
         context.coordinator.onStart = onStart
         context.coordinator.onEnd = onEnd
         context.coordinator.onViewportWidth = onViewportWidth
+        context.coordinator.updateLiveResizeState(isWindowLiveResizing)
         DispatchQueue.main.async {
             context.coordinator.observe(nsView.enclosingScrollView)
         }
@@ -2087,17 +2119,29 @@ private struct ProcessTableScrollObserver: NSViewRepresentable {
         var onStart: @MainActor () -> Void
         var onEnd: @MainActor () -> Void
         var onViewportWidth: @MainActor (CGFloat) -> Void
+        private var isWindowLiveResizing: Bool
+        private var viewportWidthCoalescer = ProcessTableViewportWidthCoalescer()
         private weak var scrollView: NSScrollView?
         private var observers: [NSObjectProtocol] = []
 
         init(
+            isWindowLiveResizing: Bool,
             onStart: @escaping @MainActor () -> Void,
             onEnd: @escaping @MainActor () -> Void,
             onViewportWidth: @escaping @MainActor (CGFloat) -> Void
         ) {
+            self.isWindowLiveResizing = isWindowLiveResizing
             self.onStart = onStart
             self.onEnd = onEnd
             self.onViewportWidth = onViewportWidth
+        }
+
+        func updateLiveResizeState(_ isLiveResizing: Bool) {
+            let didEndLiveResize = isWindowLiveResizing && !isLiveResizing
+            isWindowLiveResizing = isLiveResizing
+            if didEndLiveResize {
+                reportViewportWidth(force: true)
+            }
         }
 
         func observe(_ nextScrollView: NSScrollView?) {
@@ -2131,15 +2175,20 @@ private struct ProcessTableScrollObserver: NSViewRepresentable {
                     MainActor.assumeIsolated { self?.reportViewportWidth() }
                 }
             ]
-            reportViewportWidth()
+            reportViewportWidth(force: true)
             DispatchQueue.main.async { [weak self] in
-                self?.reportViewportWidth()
+                self?.reportViewportWidth(force: true)
             }
         }
 
-        private func reportViewportWidth() {
+        private func reportViewportWidth(force: Bool = false) {
             guard let scrollView else { return }
-            onViewportWidth(scrollView.contentView.bounds.width)
+            guard let width = viewportWidthCoalescer.reportableWidth(
+                scrollView.contentView.bounds.width,
+                isWindowLiveResizing: isWindowLiveResizing,
+                force: force
+            ) else { return }
+            onViewportWidth(width)
         }
 
         func stopObserving() {
@@ -2147,6 +2196,7 @@ private struct ProcessTableScrollObserver: NSViewRepresentable {
             observers.forEach(center.removeObserver)
             observers.removeAll()
             scrollView = nil
+            viewportWidthCoalescer = ProcessTableViewportWidthCoalescer()
         }
     }
 }

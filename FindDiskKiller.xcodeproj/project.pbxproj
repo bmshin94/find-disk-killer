@@ -67,6 +67,7 @@
 		85D2BDA3102CAF467C9F77BA /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8784670E78734B9A225A4E8 /* Localization.swift */; };
 		891960591B0568EA43CC57F4 /* HistoryChartViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCA525FC8E67E0D64066F068 /* HistoryChartViewport.swift */; };
 		8A8B67D82F0B7F40B6D2EBEF /* ClaudeNodeRuntimeStatusModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FC40456C0032BBAB5FA87E3 /* ClaudeNodeRuntimeStatusModel.swift */; };
+		8B21599E9558F69C1945BF35 /* StorageMapDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E24CDF128354712DAEF1352B /* StorageMapDashboardView.swift */; };
 		8E41D0C7545253171C96A23B /* UpdateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8691F9AB17FBDB37EFD2B719 /* UpdateCoordinator.swift */; };
 		8F8B649AC987F0A2AADB68FD /* pnpm.svg in Resources */ = {isa = PBXBuildFile; fileRef = 8EBE7E01BFA1582619CCC542 /* pnpm.svg */; };
 		94D25E6150FA69C66FED90CE /* flutter.svg in Resources */ = {isa = PBXBuildFile; fileRef = 0EEA395265754C4C1B036557 /* flutter.svg */; };
@@ -263,6 +264,7 @@
 		DF56BEF152FD832388171A2E /* go.svg */ = {isa = PBXFileReference; path = go.svg; sourceTree = "<group>"; };
 		E01B15E8F0C14456E698603B /* LoginItemSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemSettingsModel.swift; sourceTree = "<group>"; };
 		E10F875FFF3EC9D9FECC30CD /* ProcessIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessIcon.swift; sourceTree = "<group>"; };
+		E24CDF128354712DAEF1352B /* StorageMapDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageMapDashboardView.swift; sourceTree = "<group>"; };
 		E2B7CDE4FFBC48FA99A96EE0 /* AgentStorageCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStorageCleanup.swift; sourceTree = "<group>"; };
 		F0158A1AD1320B490CC04EBD /* find-disk-killer */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "find-disk-killer"; path = .; sourceTree = SOURCE_ROOT; };
 		F233B95DF10CF40F0DE7228B /* AppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntime.swift; sourceTree = "<group>"; };
@@ -415,6 +417,7 @@
 				A9079EFE2C4AFE05113320F7 /* ProcessDetailOverview.swift */,
 				457028605863AA4C13E784A4 /* ProcessesView.swift */,
 				397BF22044FB3F231AE3EF11 /* SettingsView.swift */,
+				E24CDF128354712DAEF1352B /* StorageMapDashboardView.swift */,
 				66EE63E6F7899F3E16018B73 /* StorageMapFirstRunView.swift */,
 				2A31940C062C714728E9ACF6 /* StorageMapView.swift */,
 				771088F88414148230F455C3 /* StorageResourceTreeView.swift */,
@@ -733,6 +736,7 @@
 				C17D460138BAAD4608FB55FC /* SettingsView.swift in Sources */,
 				F5E7955B1A19F150460C4A82 /* SharedComponents.swift in Sources */,
 				EC72CA4E6E3B8222A0BBB747 /* SnapshotCacheWriter.swift in Sources */,
+				8B21599E9558F69C1945BF35 /* StorageMapDashboardView.swift in Sources */,
 				6BDE5C9BC75A644419D3406E /* StorageMapFirstRunView.swift in Sources */,
 				DAAFF80728BFA104A244C5FF /* StorageMapModel.swift in Sources */,
 				08EC8E6CD62A8E5E0A03E617 /* StorageMapView.swift in Sources */,
