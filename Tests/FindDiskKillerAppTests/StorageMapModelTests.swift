@@ -708,6 +708,7 @@ import Testing
     #expect(copy.allSatisfy { !$0.containsCJKUnifiedIdeograph })
 }
 
+@MainActor
 @Test func storageMapActivityUsesSourceSpecificWorkAndAgentStage() {
     let npm = storageMapCandidate()
     let regular = StorageSourceActivityPresentation.regular(
@@ -1530,6 +1531,75 @@ import Testing
 
     #expect(summary.succeededCount == 3)
     #expect(summary.failedCount == 0)
+}
+
+@Test func goModuleCacheCleanupVerifiesGOMODCACHEBeforeCleaning() async throws {
+    let moduleCache = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-gomod-\\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: moduleCache, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: moduleCache) }
+    var moduleStat = stat()
+    _ = lstat(moduleCache.path, &moduleStat)
+    let recorder = DockerCleanupCommandRecorder(referenceOutput: "")
+    let executor = StorageResourceCleanupExecutor(goCommand: { arguments in
+        if arguments == ["env", "GOMODCACHE"] {
+            return moduleCache.path
+        }
+        return await recorder.run(arguments)
+    })
+    let request = StorageCleanupRequest(
+        id: "go.module-cache",
+        title: "Module cache",
+        displayBytes: 4_096,
+        target: .goModuleCache(
+            path: moduleCache.path,
+            identity: StoragePathIdentity(
+                device: UInt64(moduleStat.st_dev),
+                inode: UInt64(moduleStat.st_ino)
+            )
+        )
+    )
+
+    let summary = await executor.execute([request])
+    let commands = await recorder.commands
+
+    #expect(summary.succeededCount == 1)
+    #expect(commands == [["clean", "-modcache"]])
+}
+
+@Test func goModuleCacheCleanupRefusesWhenGOMODCACHEMovedSinceAnalysis() async throws {
+    let moduleCache = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-gomod-\\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: moduleCache, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: moduleCache) }
+    var moduleStat = stat()
+    _ = lstat(moduleCache.path, &moduleStat)
+    let movedPath = FileManager.default.temporaryDirectory
+        .appending(path: "FindDiskKiller-gomod-moved-\\(UUID().uuidString)", directoryHint: .isDirectory)
+        .path
+    let executor = StorageResourceCleanupExecutor(goCommand: { arguments in
+        guard arguments == ["env", "GOMODCACHE"] else {
+            Issue.record("Unexpected go arguments: \\(arguments)")
+            return ""
+        }
+        return movedPath
+    })
+    let request = StorageCleanupRequest(
+        id: "go.module-cache",
+        title: "Module cache",
+        displayBytes: 4_096,
+        target: .goModuleCache(
+            path: moduleCache.path,
+            identity: StoragePathIdentity(
+                device: UInt64(moduleStat.st_dev),
+                inode: UInt64(moduleStat.st_ino)
+            )
+        )
+    )
+
+    let summary = await executor.execute([request])
+
+    #expect(summary.failedCount == 1)
 }
 
 @Test func customCodexHomeCacheCleanupRevalidatesItsParentAndRecreatesTheRoot() async throws {
