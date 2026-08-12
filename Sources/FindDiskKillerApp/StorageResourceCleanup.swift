@@ -176,7 +176,7 @@ enum StorageSafeCleanupProjection {
         case .podmanImage:
             return node.kind == .dockerImage ? target : nil
         case .trashRepository, .removeGitWorktree, .dockerContainer, .dockerVolume,
-             .podmanContainer, .podmanVolume:
+             .dockerBuildCachePrune, .goModuleCache, .podmanContainer, .podmanVolume:
             return nil
         case .simulatorDevice, .simulatorRuntime, .simulatorRuntimeAsset:
             return nil
@@ -195,22 +195,26 @@ actor StorageResourceCleanupExecutor {
     typealias DockerCommand = @Sendable ([String]) async throws -> String
     typealias PodmanCommand = @Sendable ([String]) async throws -> String
     typealias SimctlCommand = @Sendable ([String]) async throws -> String
+    typealias GoCommand = @Sendable ([String]) async throws -> String
 
     private let fileManager: FileManager
     private let dockerCommand: DockerCommand?
     private let podmanCommand: PodmanCommand?
     private let simctlCommand: SimctlCommand?
+    private let goCommand: GoCommand?
 
     init(
         fileManager: FileManager = .default,
         dockerCommand: DockerCommand? = nil,
         podmanCommand: PodmanCommand? = nil,
-        simctlCommand: SimctlCommand? = nil
+        simctlCommand: SimctlCommand? = nil,
+        goCommand: GoCommand? = nil
     ) {
         self.fileManager = fileManager
         self.dockerCommand = dockerCommand
         self.podmanCommand = podmanCommand
         self.simctlCommand = simctlCommand
+        self.goCommand = goCommand
     }
 
     func execute(_ requests: [StorageCleanupRequest]) async -> StorageCleanupSummary {
@@ -414,6 +418,25 @@ actor StorageResourceCleanupExecutor {
                 throw StorageCleanupError.sourceChanged
             }
             try await runDocker(arguments: ["volume", "rm", name])
+        case .dockerBuildCachePrune:
+            // Official group-level operation: `docker builder prune` removes
+            // only unused build cache entries. The CLI cannot address single
+            // cache records, so this is deliberately a whole-group cleanup
+            // that leaves in-use entries untouched (no --all).
+            _ = try await runDocker(arguments: ["builder", "prune", "--force"])
+        case .goModuleCache(let path, let identity):
+            // `go clean -modcache` clears the whole module cache, so re-verify
+            // the recorded path against the live `go env GOMODCACHE` before
+            // running it. A mismatch means the cache moved or GOMODCACHE was
+            // customized since analysis; refuse instead of deleting something
+            // unexpected.
+            guard try validateIdentityIfPresent(path: path, expected: identity) else { return }
+            let reported = try await runGo(arguments: ["env", "GOMODCACHE"])
+            let moduleCache = reported.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !moduleCache.isEmpty, samePhysicalPath(moduleCache, path) else {
+                throw StorageCleanupError.sourceChanged
+            }
+            _ = try await runGo(arguments: ["clean", "-modcache"])
         case .podmanImage(let id):
             let referenceOutput: String
             do {
@@ -516,6 +539,39 @@ actor StorageResourceCleanupExecutor {
             executable: URL(fileURLWithPath: "/usr/bin/xcrun"),
             arguments: ["simctl"] + arguments
         )
+    }
+
+    @discardableResult
+    private func runGo(arguments: [String]) async throws -> String {
+        if let goCommand { return try await goCommand(arguments) }
+        guard let executable = locateGoExecutable() else {
+            throw StorageCleanupError.toolUnavailable("Go")
+        }
+        return try await run(executable: executable, arguments: arguments)
+    }
+
+    private func locateGoExecutable() -> URL? {
+        let candidates = [
+            "/usr/local/go/bin/go",
+            "/opt/homebrew/bin/go",
+            "/usr/local/bin/go",
+            "/usr/bin/go"
+        ]
+        if let candidate = candidates.first(where: {
+            fileManager.isExecutableFile(atPath: $0)
+        }) {
+            return URL(fileURLWithPath: candidate)
+        }
+        if let pathEnvironment = ProcessInfo.processInfo.environment["PATH"] {
+            for directory in pathEnvironment.split(separator: ":") {
+                let candidate = URL(fileURLWithPath: String(directory))
+                    .appending(path: "go")
+                if fileManager.isExecutableFile(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+        }
+        return nil
     }
 
     private func simulatorResourceIsAbsent(_ error: Error) -> Bool {

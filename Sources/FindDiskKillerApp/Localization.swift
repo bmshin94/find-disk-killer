@@ -1487,7 +1487,28 @@ enum L10n {
         "该 Worktree 已被 git 锁定，已拒绝移除。请先在主仓库中执行 git worktree unlock。": "This worktree is locked by git, so removal was refused. Run git worktree unlock in the main repository first.",
         "Worktree · 仅移除工作目录与注册，主仓库保持不变": "Worktree · Removes only the working directory and registration; the main repository stays intact",
         "通过 git 移除该 Worktree，保留主仓库；含未提交更改或未跟踪文件时将拒绝执行": "Removes this worktree via git and preserves the main repository; refused when it contains uncommitted changes or untracked files",
-        "分支 %@": "Branch %@"
+        "分支 %@": "Branch %@",
+        "悬空": "Dangling",
+        "运行中": "Running",
+        "已停止": "Stopped",
+        "按大小": "By Size",
+        "按名称": "By Name",
+        "使用中": "In Use",
+        "未被引用": "Unreferenced",
+        "悬空镜像": "Dangling Images",
+        "搜索镜像、容器、Volume 或构建缓存": "Search images, containers, volumes, or build cache",
+        "没有匹配的%@": "No matching %@",
+        "当前没有%@": "No %@ currently",
+        "%@ Engine 资源不可用": "%@ Engine resources unavailable",
+        "当前分析未能连接 Engine，仅显示宿主机物理存储。": "The Engine could not be reached during this analysis; only host-side storage is shown.",
+        "查看%@": "Show %@",
+        "取消选择此资源": "Deselect this resource",
+        "清理未使用的构建缓存": "Clean Up Unused Build Cache",
+        "执行时仅清理未使用缓存": "Removes only unused cache when executed",
+        "清理全部未使用的构建缓存；使用中的缓存会保留": "Removes all unused build cache; in-use cache is kept",
+        "Docker 构建缓存 · 通过 docker builder prune 清理全部未使用缓存": "Docker build cache · remove all unused cache with docker builder prune",
+        "Go 模块缓存 · 通过 go clean -modcache 删除": "Go module cache · remove with go clean -modcache",
+        "清空整个模块缓存（含下载缓存）；执行前会再次核对 GOMODCACHE 路径": "Clears the entire module cache (including the download cache) after re-verifying the GOMODCACHE path"
     ]
 }
 

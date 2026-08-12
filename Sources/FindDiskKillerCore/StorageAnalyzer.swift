@@ -1212,6 +1212,13 @@ public actor StorageAnalyzer {
                 )
             }
         }
+        if root.id == "go.module-cache", root.sourceID == .go {
+            // Official group-level operation: `go clean -modcache` clears the
+            // whole module cache (including the download cache). Module
+            // sources are expensive to rebuild, so this stays opt-in and is
+            // never part of the default safe selection.
+            return .goModuleCache(path: root.path, identity: identity)
+        }
         guard root.kind == .directory,
               components.allSatisfy({ !$0.isProtected && $0.risk == .rebuildableCache }) else {
             return nil
