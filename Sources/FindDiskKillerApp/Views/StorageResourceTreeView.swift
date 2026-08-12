@@ -779,7 +779,7 @@ struct StorageCleanupReviewSheet: View {
         case .trashRepository:
             return L10n.text("主仓库 · 整个目录移入废纸篓")
         case .removeGitWorktree:
-            return L10n.text("Worktree · 保留主仓库")
+            return L10n.text("Worktree · 仅移除工作目录与注册，主仓库保持不变")
         case .removePathContents:
             return L10n.text("可重建缓存 · 移入废纸篓后自动重建目录")
         case .simulatorDevice:
