@@ -129,7 +129,7 @@ enum WorkspaceRepositoryGrouping {
 
     /// Repository and worktree nodes carry their full path as the last
     /// " · "-separated component of `detail` (for example
-    /// "主仓库 · main · /Users/me/code/app").
+    /// "Main repository · main · /Users/me/code/app").
     static func path(from node: StorageResourceNode) -> String? {
         guard let detail = node.detail else { return nil }
         let parts = detail.components(separatedBy: " · ")
