@@ -405,6 +405,8 @@ public enum StorageResourceCleanupTarget: Codable, Hashable, Sendable {
     case dockerImage(id: String)
     case dockerContainer(id: String)
     case dockerVolume(name: String)
+    case dockerBuildCachePrune
+    case goModuleCache(path: String, identity: StoragePathIdentity)
     case podmanImage(id: String)
     case podmanContainer(id: String)
     case podmanVolume(name: String)

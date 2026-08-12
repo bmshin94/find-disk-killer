@@ -234,7 +234,10 @@ struct DockerStorageInspector: Sendable {
                 title: "构建缓存",
                 symbol: "hammer.fill",
                 children: cacheNodes,
-                risk: .rebuildableCache
+                risk: .rebuildableCache,
+                cleanupTarget: cacheNodes.contains(where: { !$0.isProtected })
+                    ? .dockerBuildCachePrune
+                    : nil
             )
         ]
     }
@@ -334,7 +337,8 @@ struct DockerStorageInspector: Sendable {
         title: String,
         symbol: String,
         children: [StorageResourceNode],
-        risk: StorageRiskLevel
+        risk: StorageRiskLevel,
+        cleanupTarget: StorageResourceCleanupTarget? = nil
     ) -> StorageResourceNode {
         StorageResourceNode(
             id: id,
@@ -351,6 +355,7 @@ struct DockerStorageInspector: Sendable {
             risk: risk,
             evidence: .providerReported,
             isProtected: children.contains(where: \.isProtected),
+            cleanupTarget: cleanupTarget,
             children: children
         )
     }

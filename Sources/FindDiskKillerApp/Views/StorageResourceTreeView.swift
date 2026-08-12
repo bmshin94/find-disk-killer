@@ -234,6 +234,10 @@ struct StorageResourceTreeView: View {
             return L10n.text("通过 Podman 删除此已停止容器")
         case .podmanVolume:
             return L10n.text("通过 Podman 删除此未被容器引用的 Volume")
+        case .dockerBuildCachePrune:
+            return L10n.text("清理全部未使用的构建缓存；使用中的缓存会保留")
+        case .goModuleCache:
+            return L10n.text("清空整个模块缓存（含下载缓存）；执行前会再次核对 GOMODCACHE 路径")
         default:
             return L10n.text("选择此资源进行清理")
         }
@@ -794,6 +798,10 @@ struct StorageCleanupReviewSheet: View {
             return L10n.text("Docker 容器 · 通过 Docker 命令删除")
         case .dockerVolume:
             return L10n.text("Docker Volume · 通过 Docker 命令删除")
+        case .dockerBuildCachePrune:
+            return L10n.text("Docker 构建缓存 · 通过 docker builder prune 清理全部未使用缓存")
+        case .goModuleCache:
+            return L10n.text("Go 模块缓存 · 通过 go clean -modcache 删除")
         case .podmanImage:
             return L10n.text("Podman 镜像 · 通过 Podman 命令删除")
         case .podmanContainer:

@@ -2902,6 +2902,18 @@ private struct StorageSourceDetailView: View {
                                 repositoryDiscoveryPanel(result: result)
                                 workspaceDetail(result)
                             }
+                        } else if item.id == .docker || item.id == .podman {
+                            VStack(alignment: .leading, spacing: 16) {
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Text(profile.headline)
+                                        .font(.title2.weight(.semibold))
+                                    Text(profile.summary)
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                containerEngineDetail(result)
+                            }
                         } else {
                             VStack(alignment: .leading, spacing: 7) {
                                 Text(profile.headline)
@@ -3167,6 +3179,31 @@ private struct StorageSourceDetailView: View {
     private var authorizationButtonTitle: String {
         if isCheckingRepositoryAuthorization { return L10n.text("正在检查授权") }
         return L10n.text(isAwaitingRepositoryAuthorization ? "检查授权" : "打开完全磁盘访问")
+    }
+
+    private func containerEngineDetail(_ result: StorageSourceResult) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let resourceProjection {
+                ContainerEngineDetailView(
+                    engineTitle: item.id == .docker ? "Docker" : "Podman",
+                    engineIDPrefix: item.id == .docker ? "docker" : "podman",
+                    nodes: resourceProjection.nodes,
+                    projection: resourceProjection,
+                    pendingSynchronizationIDs: pendingSynchronizationIDs,
+                    selectedIDs: $selectedResourceIDs,
+                    onSelectionInteraction: { didCustomizeCleanupSelection = true }
+                )
+            } else {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.text("正在准备资源明细"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 120)
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     private func workspaceDetail(_ result: StorageSourceResult) -> some View {
