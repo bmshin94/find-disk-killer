@@ -2898,28 +2898,32 @@ private struct StorageSourceDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         if item.id == .workspace {
-                            repositoryDiscoveryPanel(result: result)
-                        }
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text(profile.headline)
-                                .font(.title2.weight(.semibold))
-                            Text(profile.summary)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        ViewThatFits(in: .horizontal) {
-                            HStack(alignment: .top, spacing: 28) {
-                                composition(result)
-                                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                                management
-                                    .frame(width: 300, alignment: .topLeading)
+                            VStack(alignment: .leading, spacing: 16) {
+                                repositoryDiscoveryPanel(result: result)
+                                workspaceDetail(result)
                             }
-                            VStack(alignment: .leading, spacing: 24) {
-                                composition(result)
-                                Divider()
-                                management
+                        } else {
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text(profile.headline)
+                                    .font(.title2.weight(.semibold))
+                                Text(profile.summary)
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            ViewThatFits(in: .horizontal) {
+                                HStack(alignment: .top, spacing: 28) {
+                                    composition(result)
+                                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                                    management
+                                        .frame(width: 300, alignment: .topLeading)
+                                }
+                                VStack(alignment: .leading, spacing: 24) {
+                                    composition(result)
+                                    Divider()
+                                    management
+                                }
                             }
                         }
                     }
@@ -3034,7 +3038,7 @@ private struct StorageSourceDetailView: View {
                 repositoryAuthorizationActions
             }
         }
-        .padding(16)
+        .padding(12)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
         .overlay {
             RoundedRectangle(cornerRadius: 7)
@@ -3047,9 +3051,9 @@ private struct StorageSourceDetailView: View {
     private func repositoryDiscoveryIdentity(result: StorageSourceResult?) -> some View {
         HStack(spacing: 12) {
             Image(systemName: hasFullDiskRepositoryAccess ? "checkmark.shield.fill" : "lock.shield")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(hasFullDiskRepositoryAccess ? Color.green : Color.accentColor)
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
                 .background(
                     (hasFullDiskRepositoryAccess ? Color.green : Color.accentColor).opacity(0.1),
                     in: RoundedRectangle(cornerRadius: 6)
@@ -3163,6 +3167,29 @@ private struct StorageSourceDetailView: View {
     private var authorizationButtonTitle: String {
         if isCheckingRepositoryAuthorization { return L10n.text("正在检查授权") }
         return L10n.text(isAwaitingRepositoryAuthorization ? "检查授权" : "打开完全磁盘访问")
+    }
+
+    private func workspaceDetail(_ result: StorageSourceResult) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let resourceProjection {
+                WorkspaceRepositoriesView(
+                    projection: resourceProjection,
+                    result: result,
+                    pendingSynchronizationIDs: pendingSynchronizationIDs,
+                    selectedIDs: $selectedResourceIDs,
+                    onSelectionInteraction: { didCustomizeCleanupSelection = true }
+                )
+            } else {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.text("正在准备资源明细"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 120)
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     private func composition(_ result: StorageSourceResult) -> some View {

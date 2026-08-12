@@ -214,9 +214,19 @@ actor StorageResourceCleanupExecutor {
     }
 
     func execute(_ requests: [StorageCleanupRequest]) async -> StorageCleanupSummary {
+        // Linked worktrees must be removed before their main repositories can
+        // be trashed, so a batch selection of both completes in one pass.
+        // The main-repository guard refuses to trash while worktrees remain
+        // registered. Ordering is otherwise stable.
+        let ordered = requests.enumerated().sorted { lhs, rhs in
+            let lhsPriority = Self.priority(of: lhs.element.target)
+            let rhsPriority = Self.priority(of: rhs.element.target)
+            if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
         var outcomes: [StorageCleanupOutcome] = []
-        outcomes.reserveCapacity(requests.count)
-        for request in requests {
+        outcomes.reserveCapacity(ordered.count)
+        for request in ordered {
             do {
                 try Task.checkCancellation()
                 try await execute(request.target)
@@ -229,6 +239,14 @@ actor StorageResourceCleanupExecutor {
             }
         }
         return StorageCleanupSummary(outcomes: outcomes)
+    }
+
+    private static func priority(of target: StorageResourceCleanupTarget) -> Int {
+        switch target {
+        case .removeGitWorktree: 0
+        case .trashRepository: 1
+        default: 2
+        }
     }
 
     private func execute(_ target: StorageResourceCleanupTarget) async throws {
@@ -283,10 +301,55 @@ actor StorageResourceCleanupExecutor {
             guard !containsCurrentDirectory(path) else {
                 throw StorageCleanupError.protectedRepository
             }
-            try await run(
+            // Confirm the path is still a worktree registered by the recorded
+            // main repository before touching anything. If the main repository
+            // is gone or moved, the registration metadata cannot be cleaned
+            // through git and the directory must not be deleted on our own.
+            let worktreeList: String
+            do {
+                worktreeList = try await run(
+                    executable: URL(fileURLWithPath: "/usr/bin/git"),
+                    arguments: ["-C", mainRepositoryPath, "worktree", "list", "--porcelain"]
+                )
+            } catch {
+                throw StorageCleanupError.mainRepositoryUnavailable
+            }
+            let registeredWorktrees = worktreeList
+                .split(whereSeparator: \.isNewline)
+                .compactMap { line -> String? in
+                    let value = String(line)
+                    guard value.hasPrefix("worktree ") else { return nil }
+                    return String(value.dropFirst("worktree ".count))
+                }
+            guard registeredWorktrees.contains(where: { samePhysicalPath($0, path) }) else {
+                throw StorageCleanupError.worktreeNotRegistered
+            }
+            // Never force-remove: refuse when the worktree contains
+            // uncommitted changes or untracked files. Those files belong to
+            // the user and a worktree shares no working data with the main
+            // checkout, so there is nothing safe to preserve them with.
+            let status = try await run(
                 executable: URL(fileURLWithPath: "/usr/bin/git"),
-                arguments: ["-C", mainRepositoryPath, "worktree", "remove", path]
+                arguments: ["-C", path, "status", "--porcelain", "--untracked-files=normal"]
             )
+            let changedEntries = status
+                .split(whereSeparator: \.isNewline)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            if !changedEntries.isEmpty {
+                throw StorageCleanupError.worktreeHasChanges(changedEntries.count)
+            }
+            do {
+                try await run(
+                    executable: URL(fileURLWithPath: "/usr/bin/git"),
+                    arguments: ["-C", mainRepositoryPath, "worktree", "remove", path]
+                )
+            } catch {
+                let message = String(describing: error).lowercased()
+                if message.contains("locked") {
+                    throw StorageCleanupError.worktreeLocked
+                }
+                throw error
+            }
         case .simulatorDevice(let identifier):
             do {
                 try await runSimctl(arguments: ["delete", identifier])
@@ -558,6 +621,10 @@ private enum StorageCleanupError: LocalizedError {
     case sourceChanged
     case protectedRepository
     case repositoryHasWorktrees
+    case mainRepositoryUnavailable
+    case worktreeNotRegistered
+    case worktreeHasChanges(Int)
+    case worktreeLocked
     case toolUnavailable(String)
     case commandFailed(String)
 
@@ -569,6 +636,13 @@ private enum StorageCleanupError: LocalizedError {
             L10n.text("当前正在使用的代码仓库不能清理。")
         case .repositoryHasWorktrees:
             L10n.text("主仓库仍有关联的 Worktree，请先移除这些 Worktree 后再删除主仓库。")
+        case .mainRepositoryUnavailable:
+            L10n.text("主仓库已不可用或已移动，未执行任何删除。请重新分析后再试。")
+        case .worktreeNotRegistered:
+            L10n.text("此路径已不是该主仓库注册的 Worktree，未执行任何删除。请重新分析后再试。")
+        case .worktreeHasChanges(let count):
+            L10n.format("该 Worktree 含 %d 处未提交更改或未跟踪文件，已拒绝移除。请先在对应分支提交或丢弃这些更改。", count)        case .worktreeLocked:
+            L10n.text("该 Worktree 已被 git 锁定，已拒绝移除。请先在主仓库中执行 git worktree unlock。")
         case .toolUnavailable(let tool):
             L10n.format("未找到 %@ 官方命令行工具。", tool)
         case .commandFailed(let detail):

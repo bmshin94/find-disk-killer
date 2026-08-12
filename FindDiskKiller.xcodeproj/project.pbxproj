@@ -35,6 +35,7 @@
 		3F002AD4B37A468C2B7BB4C6 /* bun.png in Resources */ = {isa = PBXBuildFile; fileRef = FB7411C79DAE72E455833BE9 /* bun.png */; };
 		4069BD1E72DDE99FFE0AA115 /* StorageSourceExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB7197A34B2272E898203959 /* StorageSourceExperience.swift */; };
 		410E72B6FCD9EE1B23D7B8A7 /* gradle.svg in Resources */ = {isa = PBXBuildFile; fileRef = 52E9471E51D75149501B374F /* gradle.svg */; };
+		425B2A63CA5AC79EF260C25C /* WorkspaceRepositoriesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B538047244D296088473758E /* WorkspaceRepositoriesView.swift */; };
 		48BB3BA5EE8214B73A06CE55 /* RepositoryAccessAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5469758F79679C8385146301 /* RepositoryAccessAuthorization.swift */; };
 		49A3C31BC73263EBCCD5F5F7 /* FindDiskKillerNodeRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 0259DB70CBFEB5BF4CC58FFA /* FindDiskKillerNodeRuntime */; };
 		4C0DE85EF0F1D2DBE1BCE566 /* xcode.png in Resources */ = {isa = PBXBuildFile; fileRef = 23796DF1553F0D104683CE6B /* xcode.png */; };
@@ -245,6 +246,7 @@
 		B2AC3BDB45CF49DAF90CDD96 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
 		B3439FC452E8B3EA0BA1AF82 /* xcode.svg */ = {isa = PBXFileReference; path = xcode.svg; sourceTree = "<group>"; };
 		B41A166BB33A1EC2CC01A3B7 /* SharedComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedComponents.swift; sourceTree = "<group>"; };
+		B538047244D296088473758E /* WorkspaceRepositoriesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceRepositoriesView.swift; sourceTree = "<group>"; };
 		B5A1E6A36A44DA38FEC974BC /* StorageMapModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageMapModel.swift; sourceTree = "<group>"; };
 		BD70110116C4082DD9AD9BBC /* flutter.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = flutter.png; sourceTree = "<group>"; };
 		C10C6565E5CC5D4A39D52770 /* HistoryTrendChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryTrendChart.swift; sourceTree = "<group>"; };
@@ -422,6 +424,7 @@
 				2A31940C062C714728E9ACF6 /* StorageMapView.swift */,
 				771088F88414148230F455C3 /* StorageResourceTreeView.swift */,
 				CE55FF164FA95751B15D33DF /* UpdaterSettingsSection.swift */,
+				B538047244D296088473758E /* WorkspaceRepositoriesView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -748,6 +751,7 @@
 				8E41D0C7545253171C96A23B /* UpdateCoordinator.swift in Sources */,
 				4F55C539B0DCFB72B948CB3D /* UpdaterSettingsSection.swift in Sources */,
 				A7122AAFB1F2B47B7CE1E65E /* VolumeAccessTraceStore.swift in Sources */,
+				425B2A63CA5AC79EF260C25C /* WorkspaceRepositoriesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
