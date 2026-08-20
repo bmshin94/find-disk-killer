@@ -1468,6 +1468,7 @@ private struct AppActionButtonBody<Label: View>: View {
 struct AppIconButtonStyle: ButtonStyle {
     var size: CGFloat = 30
     var isFramed = true
+    var tint: Color? = nil
 
     @Environment(\.isEnabled) private var isEnabled
 
@@ -1476,6 +1477,7 @@ struct AppIconButtonStyle: ButtonStyle {
             label: configuration.label,
             size: size,
             isFramed: isFramed,
+            tint: tint,
             isEnabled: isEnabled,
             isPressed: configuration.isPressed
         )
@@ -1486,6 +1488,7 @@ private struct AppIconButtonBody<Label: View>: View {
     let label: Label
     let size: CGFloat
     let isFramed: Bool
+    let tint: Color?
     let isEnabled: Bool
     let isPressed: Bool
 
@@ -1494,7 +1497,7 @@ private struct AppIconButtonBody<Label: View>: View {
     var body: some View {
         label
             .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.primary)
+            .foregroundStyle(tint ?? .primary)
             .frame(width: size, height: size)
             .background(backgroundColor, in: RoundedRectangle(cornerRadius: 6))
             .overlay {
@@ -1519,7 +1522,15 @@ private struct AppIconButtonBody<Label: View>: View {
     }
 
     private var backgroundColor: Color {
-        guard isFramed else { return isHovering ? Color.primary.opacity(0.07) : .clear }
+        guard isFramed else {
+            if isPressed { return Color.primary.opacity(0.10) }
+            return isHovering ? Color.primary.opacity(0.07) : .clear
+        }
+        if let tint {
+            if isPressed { return tint.opacity(0.22) }
+            if isHovering { return tint.opacity(0.16) }
+            return tint.opacity(0.10)
+        }
         if isPressed { return Color.primary.opacity(0.14) }
         if isHovering { return Color.primary.opacity(0.1) }
         return Color(nsColor: .controlBackgroundColor).opacity(0.78)

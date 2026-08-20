@@ -4,6 +4,7 @@ import SwiftUI
 enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
     case overview = "现在"
     case processes = "应用"
+    case directory = "目录"
     case agentStorage = "空间地图"
     case disks = "磁盘"
     case reports = "历史分析"
@@ -16,6 +17,7 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
         case .overview: "gauge.with.dots.needle.67percent"
         case .disks: "internaldrive"
         case .processes: "square.stack.3d.up"
+        case .directory: "folder.badge.gearshape"
         case .agentStorage: "square.grid.3x3.square"
         case .reports: "chart.xyaxis.line"
         }
@@ -24,6 +26,7 @@ enum AppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
     var navigationPlaceholderKind: SectionNavigationPlaceholderKind? {
         switch self {
         case .processes: .processes
+        case .directory: nil
         case .agentStorage: nil
         case .reports: .history
         case .overview: .overview
@@ -57,6 +60,7 @@ struct RootView: View {
     let agentStorage: AgentStorageModel
     let storageMap: StorageMapModel
     let claudeNodeRuntime: ClaudeNodeRuntimeStatusModel
+    let directoryWorkspace: DirectoryWorkspaceRuntime
     @State private var requestedSection: AppSection
     @State private var loadedSection: AppSection
     @State private var sectionSnapshots: [AppSection: SectionPreviewSnapshot] = [:]
@@ -74,6 +78,7 @@ struct RootView: View {
         agentStorage: AgentStorageModel,
         storageMap: StorageMapModel,
         claudeNodeRuntime: ClaudeNodeRuntimeStatusModel,
+        directoryWorkspace: DirectoryWorkspaceRuntime,
         navigation: AppNavigationCoordinator,
         updates: UpdateCoordinator
     ) {
@@ -83,6 +88,7 @@ struct RootView: View {
         self.agentStorage = agentStorage
         self.storageMap = storageMap
         self.claudeNodeRuntime = claudeNodeRuntime
+        self.directoryWorkspace = directoryWorkspace
         self.navigation = navigation
         self.updates = updates
         _requestedSection = State(initialValue: navigation.lastMonitoringDestination)
@@ -386,6 +392,8 @@ struct RootView: View {
                 searchText: $processSearchText,
                 processDetailWindows: processDetailWindows
             )
+        case .directory:
+            DirectoryWorkspaceView(store: store, runtime: directoryWorkspace)
         case .agentStorage:
             StorageMapView(
                 model: storageMap,

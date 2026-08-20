@@ -38,9 +38,15 @@ final class AppNavigationCoordinator {
 
     init() {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["FIND_DISK_KILLER_INITIAL_SECTION"] == "storage-map" {
+        switch ProcessInfo.processInfo.environment["FIND_DISK_KILLER_INITIAL_SECTION"] {
+        case "storage-map":
             destination = .monitoring(.agentStorage)
             lastMonitoringDestination = .agentStorage
+        case "directory":
+            destination = .monitoring(.directory)
+            lastMonitoringDestination = .directory
+        default:
+            break
         }
         #endif
     }

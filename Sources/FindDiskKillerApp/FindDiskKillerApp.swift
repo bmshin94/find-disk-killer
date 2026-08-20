@@ -78,6 +78,7 @@ struct FindDiskKillerApp: App {
                 agentStorage: runtime.agentStorage,
                 storageMap: runtime.storageMap,
                 claudeNodeRuntime: runtime.claudeNodeRuntime,
+                directoryWorkspace: runtime.directoryWorkspace,
                 navigation: runtime.navigation,
                 updates: runtime.updates
             )
@@ -463,6 +464,7 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
             agentStorage: runtime.agentStorage,
             storageMap: runtime.storageMap,
             claudeNodeRuntime: runtime.claudeNodeRuntime,
+            directoryWorkspace: runtime.directoryWorkspace,
             navigation: runtime.navigation,
             updates: runtime.updates
         )
@@ -542,7 +544,10 @@ final class FindDiskKillerApplicationDelegate: NSObject, NSApplicationDelegate {
         defer { try? FileManager.default.removeItem(at: testURL) }
 
         do {
-            try await Task.sleep(for: .milliseconds(350))
+            // fs_usage needs a short startup window before it emits rows for a
+            // newly attached process. Keep the smoke write after that window
+            // so an otherwise healthy helper is not reported as empty.
+            try await Task.sleep(for: .seconds(2))
             _ = FileManager.default.createFile(atPath: testURL.path, contents: nil)
             let handle = try FileHandle(forUpdating: testURL)
             for _ in 0..<8 {

@@ -35,9 +35,12 @@ private final class TraceProcessResolver: @unchecked Sendable {
     private let lock = NSLock()
     private var cache: [UInt64: CachedIdentity] = [:]
     private let clock = ContinuousClock()
-    private let processIdentifiers: [Int32]
+    /// Process-scoped traces provide a bounded PID list. A system trace uses
+    /// nil and resolves the thread against the current process table so
+    /// descriptor-only fs_usage rows retain a usable process identity.
+    private let processIdentifiers: [Int32]?
 
-    init(processIdentifiers: [Int32]) {
+    init(processIdentifiers: [Int32]?) {
         self.processIdentifiers = processIdentifiers
     }
 
@@ -51,13 +54,18 @@ private final class TraceProcessResolver: @unchecked Sendable {
         lock.unlock()
 
         var raw = FDKTraceProcessIdentity()
-        let resolved = processIdentifiers.withUnsafeBufferPointer { identifiers in
-            fdk_trace_resolve_thread_in_processes(
-                threadID,
-                identifiers.baseAddress,
-                Int32(identifiers.count),
-                &raw
-            ) == 1
+        let resolved: Bool
+        if let processIdentifiers {
+            resolved = processIdentifiers.withUnsafeBufferPointer { identifiers in
+                fdk_trace_resolve_thread_in_processes(
+                    threadID,
+                    identifiers.baseAddress,
+                    Int32(identifiers.count),
+                    &raw
+                ) == 1
+            }
+        } else {
+            resolved = fdk_trace_resolve_thread(threadID, &raw) == 1
         }
         let identity: TraceHelperProcessIdentity? = if resolved {
             TraceHelperProcessIdentity(
@@ -125,9 +133,7 @@ final class TraceSession: TraceSessionManaging, @unchecked Sendable {
     ) throws {
         process = Process()
         output = Pipe()
-        resolver = processIdentifiers.map {
-            TraceProcessResolver(processIdentifiers: $0)
-        }
+        resolver = TraceProcessResolver(processIdentifiers: processIdentifiers)
         self.onTermination = onTermination
         process.executableURL = URL(fileURLWithPath: "/usr/bin/fs_usage")
         process.arguments = [

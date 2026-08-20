@@ -67,6 +67,7 @@
 		780A5E1EC904EA5BFF7138E3 /* claude-code.svg in Resources */ = {isa = PBXBuildFile; fileRef = 19522173F0ADEF7848BBB1F9 /* claude-code.svg */; };
 		7A7774EA60797A2624C986C7 /* ClaudeNodeRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05253D9B2F9FCF32F7C0961D /* ClaudeNodeRuntime.swift */; };
 		85D2BDA3102CAF467C9F77BA /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8784670E78734B9A225A4E8 /* Localization.swift */; };
+		88A07FA7D55A25EE84B1E769 /* DirectoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013B91EA6CB6A6235798F5F7 /* DirectoryView.swift */; };
 		891960591B0568EA43CC57F4 /* HistoryChartViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCA525FC8E67E0D64066F068 /* HistoryChartViewport.swift */; };
 		8A8B67D82F0B7F40B6D2EBEF /* ClaudeNodeRuntimeStatusModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FC40456C0032BBAB5FA87E3 /* ClaudeNodeRuntimeStatusModel.swift */; };
 		8B21599E9558F69C1945BF35 /* StorageMapDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E24CDF128354712DAEF1352B /* StorageMapDashboardView.swift */; };
@@ -167,6 +168,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		013B91EA6CB6A6235798F5F7 /* DirectoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryView.swift; sourceTree = "<group>"; };
 		022649D5F4C40685AF327583 /* python.svg */ = {isa = PBXFileReference; path = python.svg; sourceTree = "<group>"; };
 		03A020A758E12C4DAB2BFC75 /* ProcessKnowledge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessKnowledge.swift; sourceTree = "<group>"; };
 		0498F8A849C9CC809CFD1580 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/Localizable.strings"; sourceTree = "<group>"; };
@@ -411,6 +413,7 @@
 				2848171CEE38313F3FC594EC /* AgentStorageQualityViews.swift */,
 				2B6407D04086DD337BBFE898 /* AgentStorageView.swift */,
 				84723991947A93C2FE45DDB0 /* ContainerEngineDetailView.swift */,
+				013B91EA6CB6A6235798F5F7 /* DirectoryView.swift */,
 				7F13AE24E17E72270635D523 /* DisksView.swift */,
 				5A3C91E9D097BF60792BFA1D /* FileAccessTraceView.swift */,
 				294F590D986AF1CE1F5F6243 /* HistoryApplicationTable.swift */,
@@ -718,6 +721,7 @@
 				7A7774EA60797A2624C986C7 /* ClaudeNodeRuntime.swift in Sources */,
 				8A8B67D82F0B7F40B6D2EBEF /* ClaudeNodeRuntimeStatusModel.swift in Sources */,
 				33CFADCA0FD8465B17C1AA8F /* ContainerEngineDetailView.swift in Sources */,
+				88A07FA7D55A25EE84B1E769 /* DirectoryView.swift in Sources */,
 				5E24EACD1AFFADC97204287F /* DisksView.swift in Sources */,
 				61C51F635F2288A47E2B3CB8 /* FileAccessTraceStore.swift in Sources */,
 				B878AAEF8FDB35BB9B078B31 /* FileAccessTraceView.swift in Sources */,

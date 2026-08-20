@@ -723,6 +723,153 @@ func electronNonVnodeReadDoesNotCreateAFileCoverageGap() async throws {
     #expect(update.snapshot.processes.isEmpty)
 }
 
+@Test
+func systemTraceDescriptorOnlyIOIsAttributedToTheSelectedDirectory() async throws {
+    let process = TraceHelperProcessIdentity(
+        pid: 31_004,
+        startAbstime: 8_170_074_877_576,
+        displayName: "Test Writer"
+    )
+    let target = VolumeAccessTraceTarget(
+        volumeID: "volume-a",
+        name: "Startup",
+        mountPath: "/",
+        isCaseSensitive: true,
+        scopePath: "/Users/example"
+    )
+    let startedAt = try traceFixtureDate(hour: 15, minute: 47, second: 0)
+    let engine = VolumeAccessTraceEngine(
+        target: target,
+        startedAt: startedAt,
+        sessions: [],
+        openFiles: [],
+        descriptorKind: { _, _ in .vnode }
+    )
+    let path = "/Users/example/project/cache/data.bin"
+    let payload = TraceHelperDrainPayload(
+        records: [
+            TraceHelperRecord(
+                line: "15:47:01.000000 open F=75 (_WCA_______X___) \(path) 0.000150 Test Writer.18306140",
+                process: process
+            ),
+            TraceHelperRecord(
+                line: "15:47:01.100000 read F=75 B=0x1000 0.000056 Test Writer.18306139",
+                process: process
+            ),
+            TraceHelperRecord(
+                line: "15:47:01.200000 write F=75 B=0x2000 0.000056 Test Writer.18306138",
+                process: process
+            )
+        ],
+        droppedRecordCount: 0,
+        isFinished: false,
+        exitCode: nil
+    )
+
+    let update = await engine.consume(
+        payload,
+        at: try traceFixtureDate(hour: 15, minute: 47, second: 2)
+    )
+
+    #expect(update.snapshot.coverage == .complete)
+    #expect(update.snapshot.requestedReadBytes == 0x1000)
+    #expect(update.snapshot.requestedWriteBytes == 0x2000)
+    #expect(update.snapshot.directories.contains {
+        $0.path == "/Users/example/project/cache"
+            && $0.requestedReadBytes == 0x1000
+            && $0.requestedWriteBytes == 0x2000
+    })
+    #expect(!update.snapshot.directories.contains {
+        $0.path == "/Users/example/project" || $0.path == "/Users/example"
+    })
+}
+
+@Test
+func directoryTraceSamplesOnlyAfterTheTargetItselfBecomesBusy() async throws {
+    let startedAt = try traceFixtureDate(hour: 15, minute: 47, second: 0)
+    let engine = VolumeAccessTraceEngine(
+        target: VolumeAccessTraceTarget(
+            volumeID: "volume-a",
+            name: "Startup",
+            mountPath: "/",
+            scopePath: "/Users/example/Work"
+        ),
+        startedAt: startedAt,
+        sessions: [],
+        openFiles: []
+    )
+    let records = (0..<301).map { index in
+        TraceHelperRecord(
+            line: "15:47:01.100000 write F=75 B=0x1 /Users/example/Work/file-\(index) 0.000056 Writer.1",
+            process: nil
+        )
+    }
+    let payload = TraceHelperDrainPayload(
+        records: records,
+        droppedRecordCount: 0,
+        isFinished: false,
+        exitCode: nil
+    )
+
+    _ = await engine.consume(
+        payload,
+        at: startedAt,
+        adaptiveSamplingEnabled: true
+    )
+    let pressureUpdate = await engine.consume(
+        payload,
+        at: startedAt.addingTimeInterval(1.1),
+        adaptiveSamplingEnabled: true
+    )
+    #expect(pressureUpdate.targetSamplingStride == 2)
+
+    let sampledUpdate = await engine.consume(
+        TraceHelperDrainPayload(
+            records: Array(records.prefix(20)),
+            droppedRecordCount: 0,
+            isFinished: false,
+            exitCode: nil
+        ),
+        at: startedAt.addingTimeInterval(1.2),
+        adaptiveSamplingEnabled: true
+    )
+    #expect(sampledUpdate.snapshot.coverage != .complete)
+    #expect(sampledUpdate.snapshot.requestedWriteBytes == 612)
+}
+
+@Test
+func unrelatedSystemTrafficDoesNotCreateADirectoryCoverageGap() async throws {
+    let startedAt = try traceFixtureDate(hour: 15, minute: 47, second: 0)
+    let engine = VolumeAccessTraceEngine(
+        target: VolumeAccessTraceTarget(
+            volumeID: "volume-a",
+            name: "Startup",
+            mountPath: "/",
+            scopePath: "/Users/example/Work"
+        ),
+        startedAt: startedAt,
+        sessions: [],
+        openFiles: []
+    )
+    let update = await engine.consume(
+        TraceHelperDrainPayload(
+            records: [TraceHelperRecord(
+                line: "15:47:01.100000 write F=75 B=0x1000 /Users/example/Other/file 0.000056 Writer.1",
+                process: nil
+            )],
+            droppedRecordCount: 0,
+            isFinished: false,
+            exitCode: nil
+        ),
+        at: startedAt.addingTimeInterval(1),
+        samplingStride: 16,
+        adaptiveSamplingEnabled: true
+    )
+
+    #expect(update.snapshot.coverage == .complete)
+    #expect(update.snapshot.events.isEmpty)
+}
+
 @Test(arguments: [FileDescriptorKind.vnode, .unavailable])
 func electronPathlessFileReadIsNotSilentlyDiscarded(
     descriptorKind: FileDescriptorKind

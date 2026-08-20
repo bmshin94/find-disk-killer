@@ -8,20 +8,85 @@ struct VolumeAccessTraceSelection: Sendable {
     let target: VolumeAccessTraceTarget
     let displayName: String
     let mountPath: String
+    let directoryPaths: [String]
 
-    static func make(volume: VolumeInfo) -> Self {
+    var directoryPath: String { directoryPaths[0] }
+
+    static func make(volume: VolumeInfo, directoryPath: String? = nil) -> Self {
         let mountURL = URL(fileURLWithPath: volume.mountPath, isDirectory: true)
         let isCaseSensitive = (try? mountURL.resourceValues(
             forKeys: [.volumeSupportsCaseSensitiveNamesKey]
         ).volumeSupportsCaseSensitiveNames) ?? true
+        let scopePath = URL(fileURLWithPath: directoryPath ?? volume.mountPath)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
         return Self(
             volume: volume,
             target: VolumeAccessTraceTarget(
                 volume: volume,
-                isCaseSensitive: isCaseSensitive
+                isCaseSensitive: isCaseSensitive,
+                scopePath: directoryPath == nil ? nil : scopePath
             ),
-            displayName: volume.name,
-            mountPath: volume.mountPath
+            displayName: URL(fileURLWithPath: scopePath).lastPathComponent.isEmpty
+                ? scopePath
+                : URL(fileURLWithPath: scopePath).lastPathComponent,
+            mountPath: volume.mountPath,
+            directoryPaths: [scopePath]
+        )
+    }
+
+    static func make(
+        directoryPaths: [String],
+        availableVolumes: [VolumeInfo]
+    ) -> Self? {
+        var seenPaths = Set<String>()
+        let canonicalPaths = directoryPaths.compactMap { path -> String? in
+            let canonicalPath = VolumeAccessTraceTarget.canonicalPath(path)
+            guard seenPaths.insert(canonicalPath).inserted else { return nil }
+            return canonicalPath
+        }
+        let resolved = canonicalPaths.compactMap { path -> (String, VolumeInfo)? in
+            guard let volume = VolumePathResolver.bestMatch(for: path, in: availableVolumes) else {
+                return nil
+            }
+            return (path, volume)
+        }
+        guard resolved.count == canonicalPaths.count, let primary = resolved.first else {
+            return nil
+        }
+
+        var caseSensitivityByMountPath: [String: Bool] = [:]
+        let scopes = resolved.map { path, volume in
+            let isCaseSensitive = caseSensitivityByMountPath[volume.mountPath] ?? {
+                let mountURL = URL(fileURLWithPath: volume.mountPath, isDirectory: true)
+                let value = (try? mountURL.resourceValues(
+                    forKeys: [.volumeSupportsCaseSensitiveNamesKey]
+                ).volumeSupportsCaseSensitiveNames) ?? true
+                caseSensitivityByMountPath[volume.mountPath] = value
+                return value
+            }()
+            return VolumeAccessTraceScope(
+                path: path,
+                mountPath: volume.mountPath,
+                isCaseSensitive: isCaseSensitive
+            )
+        }
+        let displayName = canonicalPaths.count == 1
+            ? (URL(fileURLWithPath: primary.0).lastPathComponent.isEmpty
+                ? primary.0
+                : URL(fileURLWithPath: primary.0).lastPathComponent)
+            : "\(URL(fileURLWithPath: primary.0).lastPathComponent) +\(canonicalPaths.count - 1)"
+        return Self(
+            volume: primary.1,
+            target: VolumeAccessTraceTarget(
+                volumeID: primary.1.id,
+                name: primary.1.name,
+                scopes: scopes
+            ),
+            displayName: displayName,
+            mountPath: primary.1.mountPath,
+            directoryPaths: canonicalPaths
         )
     }
 }
@@ -29,6 +94,21 @@ struct VolumeAccessTraceSelection: Sendable {
 struct VolumeAccessTraceEngineUpdate: Sendable {
     let snapshot: VolumeAccessTraceSnapshot
     let terminalFailure: Bool
+    let targetSamplingStride: Int
+}
+
+struct VolumeAccessTraceRatePoint: Identifiable, Equatable, Sendable {
+    let timestamp: Date
+    let readBytesPerSecond: Double
+    let writeBytesPerSecond: Double
+
+    var id: Date { timestamp }
+}
+
+private struct VolumeAccessTraceRateSample {
+    let timestamp: Date
+    let readBytes: UInt64
+    let writeBytes: UInt64
 }
 
 actor VolumeAccessTraceEngine {
@@ -37,9 +117,14 @@ actor VolumeAccessTraceEngine {
         Int32
     ) -> FileDescriptorKind
 
+    private let target: VolumeAccessTraceTarget
     private var aggregator: VolumeAccessTraceAggregator
     private var descriptors = FileAccessTraceDescriptorIndex()
     private let descriptorKind: DescriptorKindResolver
+    private var targetSamplingCursor = 0
+    private var targetEventWindowStartedAt: Date?
+    private var targetEventWindowCount = 0
+    private var targetSamplingStride = 1
 
     init(
         target: VolumeAccessTraceTarget,
@@ -48,6 +133,7 @@ actor VolumeAccessTraceEngine {
         openFiles: [OpenFileRecord],
         descriptorKind: @escaping DescriptorKindResolver = FileDescriptorInspector.kind
     ) {
+        self.target = target
         self.descriptorKind = descriptorKind
         aggregator = VolumeAccessTraceAggregator(target: target, startedAt: startedAt)
         let sessionsByPID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.pid, $0) })
@@ -68,10 +154,19 @@ actor VolumeAccessTraceEngine {
 
     func consume(
         _ payload: TraceHelperDrainPayload,
-        at now: Date
+        at now: Date,
+        samplingStride: Int = 1,
+        adaptiveSamplingEnabled: Bool = false
     ) -> VolumeAccessTraceEngineUpdate {
         if payload.droppedRecordCount > 0 {
             aggregator.markDroppedEvents(payload.droppedRecordCount)
+        }
+        let streamPressureStride = max(1, samplingStride)
+        if !adaptiveSamplingEnabled {
+            targetSamplingStride = 1
+            targetSamplingCursor = 0
+            targetEventWindowStartedAt = nil
+            targetEventWindowCount = 0
         }
         for record in payload.records {
             let process = record.process.map {
@@ -109,6 +204,18 @@ actor VolumeAccessTraceEngine {
                     }
                     continue
                 }
+                // The stream is system-wide. Parse every descriptor change so
+                // path resolution remains current, but unrelated I/O is not a
+                // coverage gap for the configured directories.
+                guard target.contains(path: path) else { continue }
+                targetEventWindowCount += 1
+                if targetSamplingStride > 1 {
+                    targetSamplingCursor = (targetSamplingCursor + 1) % targetSamplingStride
+                    guard targetSamplingCursor == 0 else {
+                        aggregator.markDroppedEvents()
+                        continue
+                    }
+                }
                 let reference = process.map {
                     VolumeAccessTraceProcessReference(
                         pid: $0.pid,
@@ -129,15 +236,20 @@ actor VolumeAccessTraceEngine {
                     process: reference
                 ))
             case .unsupportedFormat:
-                aggregator.markUnsupportedFormat()
+                // A single vendor-specific fs_usage row should not terminate a
+                // long-running directory diagnosis. Keep the stream alive and
+                // expose the dropped count through the partial-coverage state.
+                aggregator.markDroppedEvents()
             case .failedCall, .ignored:
                 continue
             }
         }
+        updateTargetSampling(at: now, enabled: adaptiveSamplingEnabled)
         let terminalFailure = payload.isFinished && payload.exitCode.map { $0 != 0 } == true
         return VolumeAccessTraceEngineUpdate(
             snapshot: aggregator.snapshot(),
-            terminalFailure: terminalFailure
+            terminalFailure: terminalFailure,
+            targetSamplingStride: max(streamPressureStride, targetSamplingStride)
         )
     }
 
@@ -187,6 +299,25 @@ actor VolumeAccessTraceEngine {
             descriptors.close(process: process, fileDescriptor: fileDescriptor)
         }
     }
+
+    private func updateTargetSampling(at now: Date, enabled: Bool) {
+        guard enabled else { return }
+        if targetEventWindowStartedAt == nil {
+            targetEventWindowStartedAt = now
+            return
+        }
+        guard let startedAt = targetEventWindowStartedAt,
+              now.timeIntervalSince(startedAt) >= 1 else { return }
+        let rate = Double(targetEventWindowCount) / max(1, now.timeIntervalSince(startedAt))
+        targetSamplingStride = rate >= 2_400 ? 16
+            : rate >= 1_200 ? 8
+            : rate >= 600 ? 4
+            : rate >= 300 ? 2
+            : 1
+        if targetSamplingStride == 1 { targetSamplingCursor = 0 }
+        targetEventWindowStartedAt = now
+        targetEventWindowCount = 0
+    }
 }
 
 @MainActor
@@ -201,9 +332,14 @@ final class VolumeAccessTraceStore {
     private(set) var requestedWriteBytes: UInt64?
     private(set) var metadataEventCount: Int?
     private(set) var sources: [VolumeAccessTraceSourceSummary] = []
+    private(set) var directories: [VolumeAccessTraceDirectorySummary] = []
     private(set) var events: [VolumeAccessTraceEventSummary] = []
     private(set) var startedAt: Date?
     private(set) var elapsed: TimeInterval = 0
+    private(set) var samplingStride = 1
+    private(set) var currentReadBytesPerSecond: Double?
+    private(set) var currentWriteBytesPerSecond: Double?
+    private(set) var ratePoints: [VolumeAccessTraceRatePoint] = []
 
     let helper: TraceHelperController
     @ObservationIgnored private let activityRegistry: TraceActivityRegistry
@@ -221,6 +357,14 @@ final class VolumeAccessTraceStore {
     @ObservationIgnored private var hasPendingStartIntent = false
     @ObservationIgnored private var attemptedRegistrationForIntent = false
     @ObservationIgnored private var monitoredSessions: [ProcessSession] = []
+    @ObservationIgnored private var adaptiveSamplingEnabled = false
+    @ObservationIgnored private var eventWindowStartedAt: Date?
+    @ObservationIgnored private var eventWindowCount = 0
+    @ObservationIgnored private var automaticRestartTask: Task<Void, Never>?
+    @ObservationIgnored private var traceDurationSeconds = TraceHelperProtocolConfiguration.maximumDurationSeconds
+    @ObservationIgnored private var automaticRestartDelay: Duration = .seconds(1)
+    @ObservationIgnored private var rateSamples: [VolumeAccessTraceRateSample] = []
+    @ObservationIgnored private var lastRatePoint = Date.distantPast
 
     init(
         helper: TraceHelperController = TraceHelperController(),
@@ -242,16 +386,51 @@ final class VolumeAccessTraceStore {
         monitoredSessions = Array(sessions.prefix(512))
     }
 
-    func select(_ volume: VolumeInfo, startImmediately: Bool = false) {
+    func setAdaptiveSamplingEnabled(_ enabled: Bool) {
+        adaptiveSamplingEnabled = enabled
+        if !enabled {
+            automaticRestartTask?.cancel()
+            automaticRestartTask = nil
+        }
+        if !enabled {
+            samplingStride = 1
+        }
+        eventWindowStartedAt = nil
+        eventWindowCount = 0
+    }
+
+    func select(
+        _ volume: VolumeInfo,
+        directoryPath: String? = nil,
+        startImmediately: Bool = false
+    ) {
         guard !isRunning else { return }
         cancelPendingStart()
-        selection = .make(volume: volume)
+        selection = .make(volume: volume, directoryPath: directoryPath)
         resetMeasurements()
         helper.refreshStatus()
         state = stateForHelper()
         if startImmediately {
             start()
         }
+    }
+
+    @discardableResult
+    func selectDirectories(
+        _ directoryPaths: [String],
+        availableVolumes: [VolumeInfo]
+    ) -> Bool {
+        guard !isRunning,
+              let newSelection = VolumeAccessTraceSelection.make(
+                directoryPaths: directoryPaths,
+                availableVolumes: availableVolumes
+              ) else { return false }
+        cancelPendingStart()
+        selection = newSelection
+        resetMeasurements()
+        helper.refreshStatus()
+        state = stateForHelper()
+        return true
     }
 
     func refreshPermissionStatus() {
@@ -277,6 +456,26 @@ final class VolumeAccessTraceStore {
     }
 
     func start() {
+        beginStart(
+            duration: TraceHelperProtocolConfiguration.maximumDurationSeconds,
+            restartDelay: .seconds(1)
+        )
+    }
+
+    /// Starts a bounded capture window for a long-running guard. The helper
+    /// still receives a real fs_usage session, but the session is periodically
+    /// torn down so the system-wide tracer does not run continuously.
+    func startLowCPUGuard() {
+        beginStart(duration: 10, restartDelay: .seconds(50))
+    }
+
+    private func beginStart(duration: Int? = nil, restartDelay: Duration? = nil) {
+        if let duration {
+            traceDurationSeconds = duration
+        }
+        if let restartDelay {
+            automaticRestartDelay = restartDelay
+        }
         guard selection != nil, !isRunning else { return }
         guard reserveTraceIntent() else { return }
         hasPendingStartIntent = true
@@ -386,7 +585,9 @@ final class VolumeAccessTraceStore {
                 }
                 activityRegistry.markHelperReadyWithoutLocalLease()
                 guard !Task.isCancelled else { return }
-                let sessionID = try await helper.startSystemTrace(maximumDurationSeconds: 900)
+                let sessionID = try await helper.startSystemTrace(
+                    maximumDurationSeconds: traceDurationSeconds
+                )
                 startedSessionID = sessionID
                 guard !Task.isCancelled else {
                     await self.confirmStop(sessionID: sessionID, finalState: .stopped)
@@ -448,12 +649,25 @@ final class VolumeAccessTraceStore {
                 )
                 let now = Date()
                 guard let engine else { return }
-                if now.timeIntervalSince(lastDescriptorRefresh) >= 2 {
+                if now.timeIntervalSince(lastDescriptorRefresh) >= 5 {
                     await refreshDescriptorBaseline()
                     lastDescriptorRefresh = now
                 }
-                let update = await engine.consume(payload, at: now)
-                if now.timeIntervalSince(lastPublished) >= 0.25
+                updateSampling(for: payload.records.count, at: now)
+                let update = await engine.consume(
+                    payload,
+                    at: now,
+                    samplingStride: samplingStride,
+                    adaptiveSamplingEnabled: adaptiveSamplingEnabled
+                )
+                if samplingStride != update.targetSamplingStride {
+                    samplingStride = update.targetSamplingStride
+                }
+                // The helper stream is drained independently; publishing to
+                // SwiftUI at 2 Hz keeps metrics responsive without forcing
+                // the entire directory workspace to diff four times per
+                // second while the user is scrolling.
+                if now.timeIntervalSince(lastPublished) >= 0.5
                     || update.terminalFailure || payload.isFinished {
                     publish(update.snapshot, at: now)
                     lastPublished = now
@@ -468,10 +682,18 @@ final class VolumeAccessTraceStore {
                     self.sessionID = nil
                     state = .stopped
                     releaseTraceLease()
+                    scheduleAutomaticRestartIfNeeded()
                     return
                 }
                 if payload.hasMoreRecords {
                     await Task.yield()
+                    if samplingStride > 1 {
+                        // Bound foreground parsing work while the helper is
+                        // producing a firehose of filesystem events.
+                        try await Task.sleep(
+                            for: .milliseconds(samplingStride >= 8 ? 20 : 8)
+                        )
+                    }
                 } else {
                     try await Task.sleep(for: .milliseconds(100))
                 }
@@ -502,10 +724,12 @@ final class VolumeAccessTraceStore {
         requestedWriteBytes = snapshot.requestedWriteBytes
         metadataEventCount = snapshot.metadataEventCount
         elapsed = startedAt.map { now.timeIntervalSince($0) } ?? 0
+        updateRateTimeline(snapshot, at: now)
 
         if now.timeIntervalSince(lastListUpdate) >= 1
             || snapshot.coverage == .unsupportedFormat {
             sources = snapshot.sources
+            directories = snapshot.directories
             events = snapshot.events
             lastListUpdate = now
         }
@@ -565,6 +789,8 @@ final class VolumeAccessTraceStore {
     }
 
     private func resetMeasurements() {
+        automaticRestartTask?.cancel()
+        automaticRestartTask = nil
         drainTask?.cancel()
         drainTask = nil
         sessionID = nil
@@ -582,6 +808,19 @@ final class VolumeAccessTraceStore {
         requestedReadBytes = 0
         requestedWriteBytes = 0
         metadataEventCount = 0
+        currentReadBytesPerSecond = 0
+        currentWriteBytesPerSecond = 0
+        rateSamples = [VolumeAccessTraceRateSample(
+            timestamp: now,
+            readBytes: 0,
+            writeBytes: 0
+        )]
+        ratePoints = [VolumeAccessTraceRatePoint(
+            timestamp: now,
+            readBytesPerSecond: 0,
+            writeBytesPerSecond: 0
+        )]
+        lastRatePoint = now
     }
 
     private func clearPublishedMeasurements() {
@@ -591,9 +830,95 @@ final class VolumeAccessTraceStore {
         requestedReadBytes = nil
         requestedWriteBytes = nil
         metadataEventCount = nil
+        currentReadBytesPerSecond = nil
+        currentWriteBytesPerSecond = nil
+        ratePoints = []
         sources = []
+        directories = []
         events = []
+        samplingStride = 1
+        eventWindowStartedAt = nil
+        eventWindowCount = 0
         lastListUpdate = .distantPast
+        rateSamples = []
+        lastRatePoint = .distantPast
+    }
+
+    private func updateRateTimeline(_ snapshot: VolumeAccessTraceSnapshot, at now: Date) {
+        guard let readBytes = snapshot.requestedReadBytes,
+              let writeBytes = snapshot.requestedWriteBytes
+        else {
+            currentReadBytesPerSecond = nil
+            currentWriteBytesPerSecond = nil
+            return
+        }
+
+        rateSamples.append(VolumeAccessTraceRateSample(
+            timestamp: now,
+            readBytes: readBytes,
+            writeBytes: writeBytes
+        ))
+        let cutoff = now.addingTimeInterval(-5)
+        while rateSamples.count > 2, rateSamples[1].timestamp < cutoff {
+            rateSamples.removeFirst()
+        }
+
+        guard let baseline = rateSamples.first else { return }
+        let interval = max(now.timeIntervalSince(baseline.timestamp), 0.001)
+        let readDelta = readBytes >= baseline.readBytes ? readBytes - baseline.readBytes : 0
+        let writeDelta = writeBytes >= baseline.writeBytes ? writeBytes - baseline.writeBytes : 0
+        let readRate = Double(readDelta) / interval
+        let writeRate = Double(writeDelta) / interval
+        currentReadBytesPerSecond = readRate
+        currentWriteBytesPerSecond = writeRate
+
+        guard now.timeIntervalSince(lastRatePoint) >= 1 else { return }
+        ratePoints.append(VolumeAccessTraceRatePoint(
+            timestamp: now,
+            readBytesPerSecond: readRate,
+            writeBytesPerSecond: writeRate
+        ))
+        // The directory chart is a live overview, not a history database.
+        // Keep two minutes of one-second points so Charts stays cheap during
+        // long-running guards while the aggregated counters remain complete.
+        if ratePoints.count > 120 {
+            ratePoints.removeFirst(ratePoints.count - 120)
+        }
+        lastRatePoint = now
+    }
+
+    private func updateSampling(for eventCount: Int, at now: Date) {
+        guard adaptiveSamplingEnabled else {
+            samplingStride = 1
+            return
+        }
+        if eventWindowStartedAt == nil {
+            eventWindowStartedAt = now
+        }
+        eventWindowCount += eventCount
+        guard let started = eventWindowStartedAt,
+              now.timeIntervalSince(started) >= 1 else { return }
+
+        let rate = Double(eventWindowCount) / max(1, now.timeIntervalSince(started))
+        // Keep the full stream at ordinary rates. When the source becomes a
+        // firehose, reduce parsing and aggregation work while retaining an
+        // explicit partial-coverage count in the snapshot.
+        samplingStride = rate >= 2_400 ? 16 : rate >= 1_200 ? 8 : rate >= 600 ? 4 : rate >= 300 ? 2 : 1
+        eventWindowStartedAt = now
+        eventWindowCount = 0
+    }
+
+    private func scheduleAutomaticRestartIfNeeded() {
+        guard adaptiveSamplingEnabled, selection != nil, !isRunning else { return }
+        automaticRestartTask?.cancel()
+        automaticRestartTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: self.automaticRestartDelay)
+            guard !Task.isCancelled else { return }
+            self.automaticRestartTask = nil
+            guard self.adaptiveSamplingEnabled, !self.isRunning else { return }
+            self.beginStart()
+        }
     }
 
     private func stopDetachedSessionIfNeeded() {

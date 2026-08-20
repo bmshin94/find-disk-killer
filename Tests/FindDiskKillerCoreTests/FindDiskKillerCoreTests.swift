@@ -187,6 +187,28 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(event.threadID == 91)
 }
 
+@Test func volumeAccessTraceParserAcceptsFilesystemDataRowsWithoutByteCounts() throws {
+    let day = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 18)
+
+    guard case .event(let dataEvent) = VolumeAccessTraceParser.parse(
+        line: "10:42:18.104000 RdData[AT1] F=3 /Users/example/cache.db 0.000081 mds.91",
+        on: day
+    ), case .event(let metadataEvent) = VolumeAccessTraceParser.parse(
+        line: "10:42:18.105000 WrMeta F=3 /Users/example/cache.db 0.000081 mds.91",
+        on: day
+    ) else {
+        Issue.record("Expected filesystem data and metadata rows to parse")
+        return
+    }
+
+    #expect(dataEvent.operation == "rddata")
+    #expect(dataEvent.category == .read)
+    #expect(dataEvent.requestedBytes == nil)
+    #expect(dataEvent.path == "/Users/example/cache.db")
+    #expect(metadataEvent.operation == "wrmeta")
+    #expect(metadataEvent.category == .metadata)
+}
+
 @Test func volumeAccessTraceAggregatorSortsSourcesByFirstTouch() throws {
     let startedAt = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 0)
     var aggregator = VolumeAccessTraceAggregator(
@@ -240,6 +262,307 @@ private actor OutOfOrderDiskHealthProvider: DiskHealthProviding {
     #expect(snapshot.requestedReadBytes == 4_096)
     #expect(snapshot.sources.map { $0.process.displayName } == ["mds", "backupd"])
     #expect(snapshot.sources.first?.firstOperation == "getattrlist")
+}
+
+@Test func volumeAccessTraceAggregatorRanksContainingDirectoriesByRequestedBytes() throws {
+    let startedAt = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 0)
+    var aggregator = VolumeAccessTraceAggregator(
+        target: VolumeAccessTraceTarget(
+            volumeID: "volume-a",
+            name: "Macintosh HD",
+            mountPath: "/",
+            isCaseSensitive: true
+        ),
+        startedAt: startedAt
+    )
+    let process = VolumeAccessTraceProcessReference(
+        pid: 42,
+        startAbstime: 1,
+        displayName: "builder"
+    )
+
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(1),
+        operation: "write",
+        category: .write,
+        requestedBytes: 8_192,
+        path: "/Users/example/Build/output.o",
+        process: process
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(2),
+        operation: "read",
+        category: .read,
+        requestedBytes: 4_096,
+        path: "/Users/example/Build/input.c",
+        process: process
+    ))
+
+    let snapshot = aggregator.snapshot()
+    #expect(snapshot.directories.count == 1)
+    #expect(snapshot.directories.first?.path == "/Users/example/Build")
+    #expect(snapshot.directories.first?.requestedWriteBytes == 8_192)
+    #expect(snapshot.directories.first?.requestedReadBytes == 4_096)
+    #expect(snapshot.directories.first?.eventCount == 2)
+}
+
+@Test func volumeAccessTraceAggregatorMergesEquivalentDataVolumeAliases() throws {
+    let startedAt = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 0)
+    var aggregator = VolumeAccessTraceAggregator(
+        target: VolumeAccessTraceTarget(
+            volumeID: "volume-a",
+            name: "JianDisk",
+            mountPath: "/Volumes/JianDisk",
+            isCaseSensitive: true,
+            scopePath: "/Volumes/JianDisk/.codex-cc"
+        ),
+        startedAt: startedAt
+    )
+    let process = VolumeAccessTraceProcessReference(
+        pid: 42,
+        startAbstime: 1,
+        displayName: "builder"
+    )
+
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(1),
+        operation: "write",
+        category: .write,
+        requestedBytes: 2_048,
+        path: "/System/Volumes/Data/Volumes/JianDisk/.codex-cc/cache.db",
+        process: process
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(2),
+        operation: "write",
+        category: .write,
+        requestedBytes: 1_024,
+        path: "/Volumes/JianDisk/.codex-cc/state.db",
+        process: process
+    ))
+
+    let snapshot = aggregator.snapshot()
+    #expect(snapshot.directories.count == 1)
+    #expect(snapshot.directories.first?.path == "/Volumes/JianDisk/.codex-cc")
+    #expect(snapshot.directories.first?.requestedWriteBytes == 3_072)
+    #expect(snapshot.directories.first?.eventCount == 2)
+    #expect(snapshot.events.allSatisfy { $0.path.hasPrefix("/Volumes/JianDisk/.codex-cc/") })
+}
+
+@Test func volumeAccessTraceAggregatorRanksDirectDirectoriesWithoutDuplicatingAncestors() throws {
+    let startedAt = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 0)
+    var aggregator = VolumeAccessTraceAggregator(
+        target: VolumeAccessTraceTarget(
+            volumeID: "volume-a",
+            name: "JianDisk",
+            mountPath: "/Volumes/JianDisk",
+            scopePath: "/Volumes/JianDisk/.codex-cc"
+        ),
+        startedAt: startedAt
+    )
+    let process = VolumeAccessTraceProcessReference(
+        pid: 42,
+        startAbstime: 1,
+        displayName: "builder"
+    )
+
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(1),
+        operation: "write",
+        category: .write,
+        requestedBytes: 4_096,
+        path: "/Volumes/JianDisk/.codex-cc/sessions/today/state.db",
+        process: process
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(2),
+        operation: "write",
+        category: .write,
+        requestedBytes: 2_048,
+        path: "/Volumes/JianDisk/.codex-cc/sessions/index.db",
+        process: process
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(3),
+        operation: "write",
+        category: .write,
+        requestedBytes: 8_192,
+        path: "/Volumes/JianDisk/other/state.db",
+        process: process
+    ))
+
+    let snapshot = aggregator.snapshot()
+    #expect(snapshot.directories.map(\.path) == [
+        "/Volumes/JianDisk/.codex-cc/sessions/today",
+        "/Volumes/JianDisk/.codex-cc/sessions",
+    ])
+    let sessions = try #require(snapshot.directories.first {
+        $0.path == "/Volumes/JianDisk/.codex-cc/sessions"
+    })
+    #expect(sessions.requestedWriteBytes == 2_048)
+    #expect(sessions.eventCount == 1)
+    #expect(sessions.requestedWriteBytesIncludingDescendants == 6_144)
+    #expect(sessions.eventCountIncludingDescendants == 2)
+    #expect(!snapshot.directories.contains { $0.path == "/Volumes/JianDisk/.codex-cc" })
+    #expect(snapshot.directories.reduce(UInt64(0)) {
+        $0 + $1.requestedWriteBytes
+    } == snapshot.requestedWriteBytes)
+    #expect(snapshot.requestedWriteBytes == 6_144)
+}
+
+@Test func volumeAccessTraceRootDirectoryExcludesOtherMountedVolumes() throws {
+    let startedAt = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 0)
+    var aggregator = VolumeAccessTraceAggregator(
+        target: VolumeAccessTraceTarget(
+            volumeID: "startup-volume",
+            name: "Macintosh HD",
+            mountPath: "/",
+            scopePath: "/"
+        ),
+        startedAt: startedAt
+    )
+    let process = VolumeAccessTraceProcessReference(
+        pid: 42,
+        startAbstime: 1,
+        displayName: "builder"
+    )
+
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(1),
+        operation: "write",
+        category: .write,
+        requestedBytes: 4_096,
+        path: "/Users/example/output.o",
+        process: process
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(2),
+        operation: "write",
+        category: .write,
+        requestedBytes: 8_192,
+        path: "/Volumes/JianDisk/output.o",
+        process: process
+    ))
+
+    let snapshot = aggregator.snapshot()
+    #expect(snapshot.requestedWriteBytes == 4_096)
+    #expect(snapshot.directories.map(\.path) == ["/Users/example"])
+}
+
+@Test func volumeAccessTraceCanonicalizesStartupDataVolumePaths() {
+    let target = VolumeAccessTraceTarget(
+        volumeID: "startup-volume",
+        name: "Macintosh HD",
+        mountPath: "/",
+        scopePath: "/Users/example"
+    )
+
+    #expect(target.contains(path: "/System/Volumes/Data/Users/example/cache.db"))
+    #expect(target.contains(path: "/System/Volumes/Data/Users/example"))
+    #expect(!target.contains(path: "/System/Volumes/Data/Users/example-other/cache.db"))
+    #expect(!target.contains(path: "/System/Volumes/Data/Volumes/JianDisk/cache.db"))
+}
+
+@Test func volumeAccessTraceTargetMatchesScopesAcrossVolumes() {
+    let target = VolumeAccessTraceTarget(
+        volumeID: "startup-volume",
+        name: "Multiple directories",
+        scopes: [
+            VolumeAccessTraceScope(
+                path: "/Users/example/Work",
+                mountPath: "/"
+            ),
+            VolumeAccessTraceScope(
+                path: "/Volumes/JianDisk/Archive",
+                mountPath: "/Volumes/JianDisk"
+            ),
+        ]
+    )
+
+    #expect(target.contains(path: "/Users/example/Work/output.o"))
+    #expect(target.contains(path: "/System/Volumes/Data/Users/example/Work/cache.db"))
+    #expect(target.contains(path: "/Volumes/JianDisk/Archive/index.db"))
+    #expect(!target.contains(path: "/Users/example/Other/output.o"))
+    #expect(!target.contains(path: "/Volumes/Other/Archive/index.db"))
+}
+
+@Test func volumeAccessTraceTargetUsesTheMostSpecificScopeForAncestors() {
+    let target = VolumeAccessTraceTarget(
+        volumeID: "startup-volume",
+        name: "Nested directories",
+        scopes: [
+            VolumeAccessTraceScope(
+                path: "/Users/example/Work",
+                mountPath: "/"
+            ),
+            VolumeAccessTraceScope(
+                path: "/Users/example/Work/Private",
+                mountPath: "/"
+            ),
+        ]
+    )
+
+    #expect(target.directoryAncestors(
+        for: "/Users/example/Work/Private/Cache/state.db"
+    ) == [
+        "/Users/example/Work/Private/Cache",
+        "/Users/example/Work/Private",
+    ])
+}
+
+@Test func volumeAccessTraceAggregatorCollectsEveryConfiguredScope() throws {
+    let startedAt = try volumeTraceFixtureDate(hour: 10, minute: 42, second: 0)
+    var aggregator = VolumeAccessTraceAggregator(
+        target: VolumeAccessTraceTarget(
+            volumeID: "startup-volume",
+            name: "Multiple directories",
+            scopes: [
+                VolumeAccessTraceScope(path: "/Users/example/Work", mountPath: "/"),
+                VolumeAccessTraceScope(
+                    path: "/Volumes/JianDisk/Archive",
+                    mountPath: "/Volumes/JianDisk"
+                ),
+            ]
+        ),
+        startedAt: startedAt
+    )
+    let process = VolumeAccessTraceProcessReference(
+        pid: 42,
+        startAbstime: 1,
+        displayName: "builder"
+    )
+
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(1),
+        operation: "write",
+        category: .write,
+        requestedBytes: 4_096,
+        path: "/Users/example/Work/Build/output.o",
+        process: process
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(2),
+        operation: "read",
+        category: .read,
+        requestedBytes: 8_192,
+        path: "/Volumes/JianDisk/Archive/2026/report.db",
+        process: process
+    ))
+    aggregator.ingest(VolumeAccessTraceEvent(
+        timestamp: startedAt.addingTimeInterval(3),
+        operation: "write",
+        category: .write,
+        requestedBytes: 16_384,
+        path: "/Users/example/Other/ignored.db",
+        process: process
+    ))
+
+    let snapshot = aggregator.snapshot()
+    #expect(snapshot.requestedWriteBytes == 4_096)
+    #expect(snapshot.requestedReadBytes == 8_192)
+    #expect(snapshot.directories.contains { $0.path == "/Users/example/Work/Build" })
+    #expect(snapshot.directories.contains { $0.path == "/Volumes/JianDisk/Archive/2026" })
+    #expect(!snapshot.directories.contains { $0.path.contains("/Other") })
 }
 
 private func volumeTraceFixtureDate(hour: Int, minute: Int, second: Int) throws -> Date {

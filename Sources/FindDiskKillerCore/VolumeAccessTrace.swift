@@ -28,18 +28,21 @@ public enum VolumeAccessTraceLineResult: Equatable, Sendable {
 public enum VolumeAccessTraceParser {
     private static let readCalls: Set<String> = [
         "read", "pread", "readv", "preadv",
-        "read_nocancel", "pread_nocancel", "readv_nocancel", "preadv_nocancel"
+        "read_nocancel", "pread_nocancel", "readv_nocancel", "preadv_nocancel",
+        "rddata", "rddata_nocancel"
     ]
     private static let writeCalls: Set<String> = [
         "write", "pwrite", "writev", "pwritev",
-        "write_nocancel", "pwrite_nocancel", "writev_nocancel", "pwritev_nocancel"
+        "write_nocancel", "pwrite_nocancel", "writev_nocancel", "pwritev_nocancel",
+        "wrdata", "wrdata_nocancel"
     ]
     private static let metadataCalls: Set<String> = [
         "access", "eaccess", "faccessat", "fsgetpath",
         "getattrlist", "getattrlistat", "getattrlistbulk",
         "getdirentries", "getdirentries64", "getxattr", "listxattr",
         "lstat", "lstat64", "open", "open_nocancel", "openat", "openat_nocancel",
-        "readlink", "readlinkat", "searchfs", "stat", "stat64", "statfs"
+        "readlink", "readlinkat", "searchfs", "stat", "stat64", "statfs",
+        "rdmeta", "wrmeta", "rdmetacs", "wrmetacs"
     ]
 
     public static func parse(
@@ -75,9 +78,9 @@ public enum VolumeAccessTraceParser {
         let requestedBytes = byteIndex.flatMap {
             parseUnsigned(String(fields[$0].dropFirst(2)))
         }
-        if category == .read || category == .write, requestedBytes == nil {
-            return .unsupportedFormat
-        }
+        // Some macOS releases omit B= for cache/metadata-adjacent rows. Keep
+        // the path and process visible, but leave the byte count unknown rather
+        // than treating one row as proof that the entire stream is unusable.
 
         let fileDescriptor = fields.first(where: { $0.hasPrefix("F=") })
             .flatMap { parseFileDescriptor(String($0.dropFirst(2))) }
@@ -85,13 +88,13 @@ public enum VolumeAccessTraceParser {
         guard let durationIndex = fields.indices.reversed().first(where: {
                 $0 > 1 && $0 < fields.count - 1 && isDuration(fields[$0])
               })
-        else { return .unsupportedFormat }
+        else { return .ignored }
 
         let processField = fields[(durationIndex + 1)...]
             .filter { $0 != "W" }
             .joined(separator: " ")
         guard let process = parseProcessField(processField) else {
-            return .unsupportedFormat
+            return .ignored
         }
 
         let detailFields = fields[2..<durationIndex]
@@ -111,9 +114,15 @@ public enum VolumeAccessTraceParser {
     }
 
     private static func normalizedOperation(_ value: String) -> String {
-        value.trimmingCharacters(in: CharacterSet.alphanumerics.union(
+        let trimmed = value.trimmingCharacters(in: CharacterSet.alphanumerics.union(
             CharacterSet(charactersIn: "_")
         ).inverted).lowercased()
+        // fs_usage annotates filesystem calls on some macOS releases, for
+        // example `RdData[AT1]`. The annotation is not part of the operation
+        // name used for aggregation.
+        return trimmed.split(whereSeparator: { $0 == "[" || $0 == "(" || $0 == "<" })
+            .first
+            .map(String.init) ?? trimmed
     }
 
     private static func parseTimestamp(
@@ -235,46 +244,184 @@ public enum VolumeAccessTraceParser {
     }
 }
 
+public struct VolumeAccessTraceScope: Equatable, Sendable {
+    public let path: String
+    public let mountPath: String
+    public let isCaseSensitive: Bool
+    fileprivate let includesAncestorDirectories: Bool
+
+    public init(
+        path: String,
+        mountPath: String,
+        isCaseSensitive: Bool = true,
+        includesAncestorDirectories: Bool = true
+    ) {
+        self.path = VolumeAccessTraceTarget.canonicalPath(path)
+        self.mountPath = VolumeAccessTraceTarget.canonicalPath(mountPath)
+        self.isCaseSensitive = isCaseSensitive
+        self.includesAncestorDirectories = includesAncestorDirectories
+    }
+
+    fileprivate func contains(_ candidate: String) -> Bool {
+        if VolumeAccessTraceTarget.pathsEqual(
+            path,
+            "/",
+            caseSensitive: isCaseSensitive
+        ), mountPath == "/" {
+            return VolumeAccessTraceTarget.belongsToStartupVolume(candidate)
+        }
+        if VolumeAccessTraceTarget.pathsEqual(
+            candidate,
+            path,
+            caseSensitive: isCaseSensitive
+        ) {
+            return true
+        }
+        let prefix = path == "/" ? "/" : path + "/"
+        return candidate.count > path.count && (isCaseSensitive
+            ? candidate.hasPrefix(prefix)
+            : candidate.lowercased().hasPrefix(prefix.lowercased()))
+    }
+}
+
 public struct VolumeAccessTraceTarget: Equatable, Sendable {
     public let volumeID: String
     public let name: String
     public let mountPath: String
+    public let scopePath: String
     public let isCaseSensitive: Bool
+    public let scopes: [VolumeAccessTraceScope]
 
     public init(
         volumeID: String,
         name: String,
         mountPath: String,
-        isCaseSensitive: Bool = true
+        isCaseSensitive: Bool = true,
+        scopePath: String? = nil
     ) {
-        self.volumeID = volumeID
-        self.name = name
-        self.mountPath = URL(fileURLWithPath: mountPath).standardizedFileURL.path
-        self.isCaseSensitive = isCaseSensitive
+        let canonicalMountPath = Self.canonicalPath(mountPath)
+        let canonicalScopePath = Self.canonicalPath(scopePath ?? mountPath)
+        self.init(
+            volumeID: volumeID,
+            name: name,
+            scopes: [VolumeAccessTraceScope(
+                path: canonicalScopePath,
+                mountPath: canonicalMountPath,
+                isCaseSensitive: isCaseSensitive,
+                includesAncestorDirectories: scopePath != nil
+            )]
+        )
     }
 
-    public init(volume: VolumeInfo, isCaseSensitive: Bool = true) {
+    public init(
+        volumeID: String,
+        name: String,
+        scopes: [VolumeAccessTraceScope]
+    ) {
+        precondition(!scopes.isEmpty, "A volume access target requires at least one scope")
+        self.volumeID = volumeID
+        self.name = name
+        self.scopes = scopes
+        self.mountPath = scopes[0].mountPath
+        self.scopePath = scopes[0].path
+        self.isCaseSensitive = scopes[0].isCaseSensitive
+    }
+
+    public init(
+        volume: VolumeInfo,
+        isCaseSensitive: Bool = true,
+        scopePath: String? = nil
+    ) {
         self.init(
             volumeID: volume.id,
             name: volume.name,
             mountPath: volume.mountPath,
-            isCaseSensitive: isCaseSensitive
+            isCaseSensitive: isCaseSensitive,
+            scopePath: scopePath
         )
     }
 
     public func contains(path: String) -> Bool {
-        let candidate = URL(fileURLWithPath: path).standardizedFileURL.path
-        let root = mountPath
-        let equals: (String, String) -> Bool = isCaseSensitive
-            ? { $0 == $1 }
-            : { $0.caseInsensitiveCompare($1) == .orderedSame }
-        let hasPrefix: (String, String) -> Bool = isCaseSensitive
-            ? { $0.hasPrefix($1) }
-            : { $0.lowercased().hasPrefix($1.lowercased()) }
-        if equals(root, "/") { return true }
-        if equals(candidate, root) { return true }
-        return candidate.count > root.count
-            && hasPrefix(candidate, root + "/")
+        let candidate = Self.canonicalPath(path)
+        return scopes.contains { $0.contains(candidate) }
+    }
+
+    func directoryAncestors(for path: String) -> [String] {
+        let canonicalPath = Self.canonicalPath(path)
+        guard let scope = matchingScope(for: canonicalPath) else { return [] }
+        var current = URL(fileURLWithPath: canonicalPath)
+            .deletingLastPathComponent()
+            .standardizedFileURL
+            .path
+        var result: [String] = [current]
+
+        guard scope.includesAncestorDirectories else { return result }
+
+        while scope.contains(current) {
+            if Self.pathsEqual(current, scope.path, caseSensitive: scope.isCaseSensitive) {
+                break
+            }
+            let parent = URL(fileURLWithPath: current)
+                .deletingLastPathComponent()
+                .standardizedFileURL
+                .path
+            guard parent != current else { break }
+            current = parent
+            result.append(current)
+        }
+        return result
+    }
+
+    private func matchingScope(for canonicalPath: String) -> VolumeAccessTraceScope? {
+        scopes
+            .filter { $0.contains(canonicalPath) }
+            .max { $0.path.count < $1.path.count }
+    }
+
+    /// fs_usage can report an APFS Data-volume path through either the public
+    /// mount (`/Users`, `/private`, `/Volumes`, ...) or its backing
+    /// `/System/Volumes/Data/...` alias. Resolve real symlinks first, then
+    /// apply the stable mount alias even when the file has already disappeared
+    /// by the time the event is aggregated.
+    public static func canonicalPath(_ path: String) -> String {
+        let resolved = URL(fileURLWithPath: path)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        let dataVolumesPrefix = "/System/Volumes/Data/Volumes/"
+        if resolved.hasPrefix(dataVolumesPrefix) {
+            return "/Volumes/" + resolved.dropFirst(dataVolumesPrefix.count)
+        }
+        if resolved == "/System/Volumes/Data/Volumes" {
+            return "/Volumes"
+        }
+        let startupDataPrefix = "/System/Volumes/Data/"
+        if resolved.hasPrefix(startupDataPrefix) {
+            return "/" + resolved.dropFirst(startupDataPrefix.count)
+        }
+        if resolved == "/System/Volumes/Data" {
+            return "/"
+        }
+        return resolved
+    }
+
+    fileprivate static func belongsToStartupVolume(_ path: String) -> Bool {
+        guard path != "/" else { return true }
+        let excludedPrefixes = [
+            "/Volumes/",
+            "/System/Volumes/Preboot/",
+            "/System/Volumes/VM/",
+            "/System/Volumes/Update/"
+        ]
+        return !excludedPrefixes.contains { path.hasPrefix($0) }
+    }
+
+    fileprivate static func pathsEqual(
+        _ lhs: String,
+        _ rhs: String,
+        caseSensitive: Bool
+    ) -> Bool {
+        caseSensitive ? lhs == rhs : lhs.caseInsensitiveCompare(rhs) == .orderedSame
     }
 }
 
@@ -337,6 +484,25 @@ public struct VolumeAccessTraceSourceSummary: Identifiable, Equatable, Sendable 
     public var id: String { process.stableID }
 }
 
+public struct VolumeAccessTraceDirectorySummary: Identifiable, Equatable, Sendable {
+    public let path: String
+    /// Requested I/O whose event path is directly inside this directory.
+    /// These mutually exclusive values are suitable for a flat Top ranking.
+    public let requestedReadBytes: UInt64
+    public let requestedWriteBytes: UInt64
+    public let eventCount: Int
+    public let lastEventAt: Date
+    /// Requested I/O inside this directory or any descendant directory.
+    /// These values intentionally overlap between ancestors and descendants
+    /// and therefore belong in a directory detail, not a flat ranking.
+    public let requestedReadBytesIncludingDescendants: UInt64
+    public let requestedWriteBytesIncludingDescendants: UInt64
+    public let eventCountIncludingDescendants: Int
+    public let lastEventAtIncludingDescendants: Date
+
+    public var id: String { path }
+}
+
 public struct VolumeAccessTraceEventSummary: Identifiable, Equatable, Sendable {
     public let id: String
     public let timestamp: Date
@@ -355,6 +521,7 @@ public struct VolumeAccessTraceSnapshot: Equatable, Sendable {
     public let requestedWriteBytes: UInt64?
     public let metadataEventCount: Int?
     public let sources: [VolumeAccessTraceSourceSummary]
+    public let directories: [VolumeAccessTraceDirectorySummary]
     public let events: [VolumeAccessTraceEventSummary]
 }
 
@@ -371,6 +538,17 @@ public struct VolumeAccessTraceAggregator: Sendable {
         var writeBytes: UInt64 = 0
     }
 
+    private struct DirectoryTotals: Sendable {
+        var directReadBytes: UInt64 = 0
+        var directWriteBytes: UInt64 = 0
+        var directEventCount = 0
+        var directLastEventAt: Date?
+        var inclusiveReadBytes: UInt64 = 0
+        var inclusiveWriteBytes: UInt64 = 0
+        var inclusiveEventCount = 0
+        var inclusiveLastEventAt: Date?
+    }
+
     private let target: VolumeAccessTraceTarget
     private let startedAt: Date
     private let maximumSources: Int
@@ -381,6 +559,7 @@ public struct VolumeAccessTraceAggregator: Sendable {
     private var firstEventAt: Date?
     private var lastEventAt: Date?
     private var sources: [VolumeAccessTraceProcessReference: SourceTotals] = [:]
+    private var directories: [String: DirectoryTotals] = [:]
     private var events: [VolumeAccessTraceEventSummary] = []
     private var droppedEventCount: UInt64 = 0
     private var formatIsUnsupported = false
@@ -403,6 +582,7 @@ public struct VolumeAccessTraceAggregator: Sendable {
             return
         }
         guard target.contains(path: event.path) else { return }
+        let canonicalEventPath = VolumeAccessTraceTarget.canonicalPath(event.path)
 
         switch event.category {
         case .metadata:
@@ -428,6 +608,61 @@ public struct VolumeAccessTraceAggregator: Sendable {
         firstEventAt = min(firstEventAt ?? event.timestamp, event.timestamp)
         lastEventAt = max(lastEventAt ?? event.timestamp, event.timestamp)
 
+        if event.category != .metadata {
+            let directoryPaths = target.directoryAncestors(for: canonicalEventPath)
+            let directDirectoryPath = directoryPaths.first
+            for directoryPath in directoryPaths {
+                var directory = directories[directoryPath, default: DirectoryTotals()]
+                directory.inclusiveEventCount += 1
+                directory.inclusiveLastEventAt = max(
+                    directory.inclusiveLastEventAt ?? event.timestamp,
+                    event.timestamp
+                )
+                if directoryPath == directDirectoryPath {
+                    directory.directEventCount += 1
+                    directory.directLastEventAt = max(
+                        directory.directLastEventAt ?? event.timestamp,
+                        event.timestamp
+                    )
+                }
+                switch event.category {
+                case .read:
+                    if let bytes = event.requestedBytes {
+                        guard let inclusive = adding(directory.inclusiveReadBytes, bytes) else {
+                            formatIsUnsupported = true
+                            return
+                        }
+                        directory.inclusiveReadBytes = inclusive
+                        if directoryPath == directDirectoryPath {
+                            guard let direct = adding(directory.directReadBytes, bytes) else {
+                                formatIsUnsupported = true
+                                return
+                            }
+                            directory.directReadBytes = direct
+                        }
+                    }
+                case .write:
+                    if let bytes = event.requestedBytes {
+                        guard let inclusive = adding(directory.inclusiveWriteBytes, bytes) else {
+                            formatIsUnsupported = true
+                            return
+                        }
+                        directory.inclusiveWriteBytes = inclusive
+                        if directoryPath == directDirectoryPath {
+                            guard let direct = adding(directory.directWriteBytes, bytes) else {
+                                formatIsUnsupported = true
+                                return
+                            }
+                            directory.directWriteBytes = direct
+                        }
+                    }
+                case .metadata:
+                    break
+                }
+                directories[directoryPath] = directory
+            }
+        }
+
         if sources[event.process] == nil, sources.count >= maximumSources {
             markDroppedEvents()
         } else {
@@ -435,7 +670,7 @@ public struct VolumeAccessTraceAggregator: Sendable {
             if totals.firstEventAt == nil || event.timestamp < totals.firstEventAt! {
                 totals.firstEventAt = event.timestamp
                 totals.firstOperation = event.operation
-                totals.samplePath = event.path
+                totals.samplePath = canonicalEventPath
             }
             totals.lastEventAt = max(totals.lastEventAt ?? event.timestamp, event.timestamp)
             switch event.category {
@@ -470,7 +705,7 @@ public struct VolumeAccessTraceAggregator: Sendable {
                 operation: event.operation,
                 category: event.category,
                 requestedBytes: event.requestedBytes,
-                path: event.path,
+                path: canonicalEventPath,
                 process: event.process
             ))
         } else {
@@ -496,6 +731,7 @@ public struct VolumeAccessTraceAggregator: Sendable {
                 requestedWriteBytes: nil,
                 metadataEventCount: nil,
                 sources: [],
+                directories: [],
                 events: []
             )
         }
@@ -532,6 +768,29 @@ public struct VolumeAccessTraceAggregator: Sendable {
                 return $0.process.displayName.localizedStandardCompare(
                     $1.process.displayName
                 ) == .orderedAscending
+            },
+            directories: directories.compactMap { path, totals in
+                // A flat Top list must be mutually exclusive. Ancestors that
+                // only inherited descendant activity remain internal so they
+                // can contribute to inclusive totals, but are not emitted as
+                // independent ranked rows.
+                guard let directLastEventAt = totals.directLastEventAt,
+                      let inclusiveLastEventAt = totals.inclusiveLastEventAt
+                else { return nil }
+                return VolumeAccessTraceDirectorySummary(
+                    path: path,
+                    requestedReadBytes: totals.directReadBytes,
+                    requestedWriteBytes: totals.directWriteBytes,
+                    eventCount: totals.directEventCount,
+                    lastEventAt: directLastEventAt,
+                    requestedReadBytesIncludingDescendants: totals.inclusiveReadBytes,
+                    requestedWriteBytesIncludingDescendants: totals.inclusiveWriteBytes,
+                    eventCountIncludingDescendants: totals.inclusiveEventCount,
+                    lastEventAtIncludingDescendants: inclusiveLastEventAt
+                )
+            }.sorted {
+                ($0.requestedWriteBytes, $0.requestedReadBytes, $0.path)
+                    > ($1.requestedWriteBytes, $1.requestedReadBytes, $1.path)
             },
             events: events.sorted { $0.timestamp < $1.timestamp }
         )

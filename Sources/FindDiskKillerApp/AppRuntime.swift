@@ -12,6 +12,7 @@ final class AppRuntime {
     let agentStorage: AgentStorageModel
     let storageMap: StorageMapModel
     let claudeNodeRuntime: ClaudeNodeRuntimeStatusModel
+    let directoryWorkspace: DirectoryWorkspaceRuntime
     let processDetailWindows: ProcessDetailWindowCoordinator
     let navigation: AppNavigationCoordinator
     let traceActivityRegistry: TraceActivityRegistry
@@ -31,6 +32,7 @@ final class AppRuntime {
         agentStorage: AgentStorageModel? = nil,
         storageMap: StorageMapModel? = nil,
         claudeNodeRuntime: ClaudeNodeRuntimeStatusModel = ClaudeNodeRuntimeStatusModel(),
+        directoryWorkspace: DirectoryWorkspaceRuntime? = nil,
         processDetailWindows: ProcessDetailWindowCoordinator = ProcessDetailWindowCoordinator(),
         navigation: AppNavigationCoordinator = AppNavigationCoordinator(),
         traceActivityRegistry: TraceActivityRegistry = TraceActivityRegistry(),
@@ -46,6 +48,9 @@ final class AppRuntime {
         )
         self.storageMap = storageMap ?? StorageMapModel(locationRepository: locationRepository)
         self.claudeNodeRuntime = claudeNodeRuntime
+        self.directoryWorkspace = directoryWorkspace ?? DirectoryWorkspaceRuntime(
+            activityRegistry: traceActivityRegistry
+        )
         self.processDetailWindows = processDetailWindows
         self.navigation = navigation
         self.traceActivityRegistry = traceActivityRegistry
@@ -77,6 +82,7 @@ final class AppRuntime {
         guard !isSleeping else { return }
         isSleeping = true
         shouldResumeAfterWake = store.isCollecting || startTask != nil
+        directoryWorkspace.stopAll()
         if store.isCollecting {
             store.stop()
         } else {
@@ -102,6 +108,7 @@ final class AppRuntime {
     func prepareForTermination(timeout: Duration = .seconds(2)) async -> Bool {
         isTerminating = true
         startTask?.cancel()
+        directoryWorkspace.stopAll()
         store.stop()
         let completion = FirstLifecycleCompletion()
         let agentStorage = self.agentStorage
