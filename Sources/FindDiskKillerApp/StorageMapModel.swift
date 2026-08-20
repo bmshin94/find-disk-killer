@@ -68,28 +68,40 @@ final class StorageMapModel {
                 await StorageAnalyzer(configuration: .init(
                     agentDataLocations: locationRepository.locations(),
                     includesPrivacyProtectedRepositoryLocations: repositoryAccessCheck(),
-                    discoversCodeRepositories: false
+                    discoversCodeRepositories: false,
+                    maximumConcurrentSources: 2,
+                    agentRootsAggregationOnly: true,
+                    packageManagerRootsAggregationOnly: true
                 )).detect()
             },
             progressiveDetect: { progress in
                 await StorageAnalyzer(configuration: .init(
                     agentDataLocations: locationRepository.locations(),
                     includesPrivacyProtectedRepositoryLocations: repositoryAccessCheck(),
-                    discoversCodeRepositories: false
+                    discoversCodeRepositories: false,
+                    maximumConcurrentSources: 2,
+                    agentRootsAggregationOnly: true,
+                    packageManagerRootsAggregationOnly: true
                 )).detect(progress: progress)
             },
             scan: { progress in
                 try await StorageAnalyzer(configuration: .init(
                     agentDataLocations: locationRepository.locations(),
                     includesPrivacyProtectedRepositoryLocations: repositoryAccessCheck(),
-                    discoversCodeRepositories: false
+                    discoversCodeRepositories: false,
+                    maximumConcurrentSources: 2,
+                    agentRootsAggregationOnly: true,
+                    packageManagerRootsAggregationOnly: true
                 )).scan(progress: progress)
             },
             scanSource: { sourceID, progress in
                 try await StorageAnalyzer(configuration: .init(
                     agentDataLocations: locationRepository.locations(),
                     includesPrivacyProtectedRepositoryLocations: repositoryAccessCheck(),
-                    discoversCodeRepositories: sourceID == .workspace
+                    discoversCodeRepositories: sourceID == .workspace,
+                    maximumConcurrentSources: 2,
+                    agentRootsAggregationOnly: sourceID.agentStorageProvider != nil,
+                    packageManagerRootsAggregationOnly: true
                 )).scan(sourceID: sourceID, progress: progress)
             },
             locationRepository: locationRepository,

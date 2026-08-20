@@ -80,9 +80,12 @@ public actor StorageAnalyzer {
         let outputs = try await scanCandidates(
             candidates,
             // Every discovered source should enter the scan immediately. The
-            // cooperative runtime still controls execution, while avoiding a
-            // small fixed queue that leaves large sources blocking the rest.
-            maximumConcurrentSources: candidates.count,
+            // cooperative runtime still controls execution. Production callers
+            // can cap disk-heavy workers without changing the deterministic
+            // unbounded default used by injected test analyzers.
+            maximumConcurrentSources: configuration.maximumConcurrentSources ?? candidates.count,
+            agentRootsAggregationOnly: configuration.agentRootsAggregationOnly,
+            packageManagerRootsAggregationOnly: configuration.packageManagerRootsAggregationOnly,
             mountedVolumes: mountedVolumes,
             progress: progressAccumulator,
             sourceStartHook: sourceStartHook,
@@ -137,6 +140,8 @@ public actor StorageAnalyzer {
     private func scanCandidates(
         _ candidates: [StorageSourceCandidate],
         maximumConcurrentSources: Int,
+        agentRootsAggregationOnly: Bool,
+        packageManagerRootsAggregationOnly: Bool,
         mountedVolumes: [VolumeInfo],
         progress: StorageScanProgressAccumulator,
         sourceStartHook: SourceStartHook?,
@@ -152,6 +157,8 @@ public actor StorageAnalyzer {
                         try await Self.scanCandidate(
                             candidate,
                             mountedVolumes: mountedVolumes,
+                            agentRootsAggregationOnly: agentRootsAggregationOnly,
+                            packageManagerRootsAggregationOnly: packageManagerRootsAggregationOnly,
                             progress: progress,
                             sourceStartHook: sourceStartHook,
                             rootStartHook: rootStartHook
@@ -169,6 +176,8 @@ public actor StorageAnalyzer {
                         try await Self.scanCandidate(
                             candidate,
                             mountedVolumes: mountedVolumes,
+                            agentRootsAggregationOnly: agentRootsAggregationOnly,
+                            packageManagerRootsAggregationOnly: packageManagerRootsAggregationOnly,
                             progress: progress,
                             sourceStartHook: sourceStartHook,
                             rootStartHook: rootStartHook
@@ -183,6 +192,8 @@ public actor StorageAnalyzer {
     private nonisolated static func scanCandidate(
         _ candidate: StorageSourceCandidate,
         mountedVolumes: [VolumeInfo],
+        agentRootsAggregationOnly: Bool,
+        packageManagerRootsAggregationOnly: Bool,
         progress: StorageScanProgressAccumulator,
         sourceStartHook: SourceStartHook?,
         rootStartHook: RootStartHook?
@@ -208,6 +219,8 @@ public actor StorageAnalyzer {
                             rootOffset: work.offset,
                             totalRootCount: roots.count,
                             mountedVolumes: mountedVolumes,
+                            agentRootsAggregationOnly: agentRootsAggregationOnly,
+                            packageManagerRootsAggregationOnly: packageManagerRootsAggregationOnly,
                             progress: progress,
                             rootStartHook: rootStartHook
                         )
@@ -227,6 +240,8 @@ public actor StorageAnalyzer {
                             rootOffset: work.offset,
                             totalRootCount: roots.count,
                             mountedVolumes: mountedVolumes,
+                            agentRootsAggregationOnly: agentRootsAggregationOnly,
+                            packageManagerRootsAggregationOnly: packageManagerRootsAggregationOnly,
                             progress: progress,
                             rootStartHook: rootStartHook
                         )
@@ -280,6 +295,8 @@ public actor StorageAnalyzer {
         rootOffset: Int,
         totalRootCount: Int,
         mountedVolumes: [VolumeInfo],
+        agentRootsAggregationOnly: Bool,
+        packageManagerRootsAggregationOnly: Bool,
         progress: StorageScanProgressAccumulator,
         rootStartHook: RootStartHook?
     ) throws -> StorageRootScanOutput {
@@ -306,15 +323,27 @@ public actor StorageAnalyzer {
             currentWorkIndex: rootOffset + 1,
             totalWorkCount: totalRootCount
         )
+        let excludedDescendantPaths = Set(candidate.roots.compactMap { other -> String? in
+            guard other.id != root.id,
+                  other.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/") else {
+                return nil
+            }
+            return String(other.path.dropFirst(root.path.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        })
         do {
             if candidate.id == .go || candidate.id == .workspace
                 || candidate.id == .gradle || candidate.id == .androidSDK
                 || candidate.id == .flutter || candidate.id == .cocoaPods
                 || candidate.id == .homebrew || candidate.id == .rust
-                || candidate.id == .toolCaches {
+                || candidate.id == .toolCaches
+                || (agentRootsAggregationOnly && Self.isAgentStorageSource(candidate.id))
+                || (packageManagerRootsAggregationOnly
+                    && Self.isHighCardinalityPackageManagerSource(candidate.id)) {
                 try measureDirectoryAggregate(
                     root: root,
                     excludingNames: root.id.hasSuffix(".module-cache") ? ["cache"] : [],
+                    excludingRelativePaths: excludedDescendantPaths,
                     into: &ledger,
                     processedEntries: &processedEntries,
                     processedBytes: &processedBytes,
@@ -322,14 +351,6 @@ public actor StorageAnalyzer {
                     mountedVolumes: mountedVolumes
                 )
             } else {
-                let excludedDescendantPaths = Set(candidate.roots.compactMap { other -> String? in
-                    guard other.id != root.id,
-                          other.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/") else {
-                        return nil
-                    }
-                    return String(other.path.dropFirst(root.path.count))
-                        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                })
                 try measure(
                     root: root,
                     fileManager: FileManager(),
@@ -379,6 +400,7 @@ public actor StorageAnalyzer {
     private nonisolated static func measureDirectoryAggregate(
         root: StorageSourceRoot,
         excludingNames: [String],
+        excludingRelativePaths: Set<String>,
         into ledger: inout [StoragePhysicalIdentity: StorageLedgerEntry],
         processedEntries: inout Int,
         processedBytes: inout UInt64,
@@ -394,7 +416,8 @@ public actor StorageAnalyzer {
         }
         let allocatedBytes = try directoryAllocatedBytes(
             at: rootURL,
-            excludingNames: excludingNames
+            excludingNames: excludingNames,
+            excludingRelativePaths: excludingRelativePaths
         )
         let classification = StoragePathClassifier.classify(
             sourceID: root.sourceID,
@@ -434,26 +457,43 @@ public actor StorageAnalyzer {
         }
     }
 
+    private nonisolated static func isAgentStorageSource(_ sourceID: StorageSourceID) -> Bool {
+        switch sourceID {
+        case .codex, .claude, .openCode: true
+        default: false
+        }
+    }
+
+    private nonisolated static func isHighCardinalityPackageManagerSource(
+        _ sourceID: StorageSourceID
+    ) -> Bool {
+        switch sourceID {
+        case .npm, .pnpm, .bun: true
+        default: false
+        }
+    }
+
     private nonisolated static func directoryAllocatedBytes(
         at url: URL,
-        excludingNames: [String]
+        excludingNames: [String],
+        excludingRelativePaths: Set<String>
     ) throws -> UInt64 {
+        let excludedComponents = excludingRelativePaths.compactMap {
+            normalizedRelativePathComponents($0)
+        } + excludingNames.map { [$0] }
         let targets: [URL]
-        var rootDirectoryBytes: UInt64 = 0
-        if excludingNames.isEmpty {
+        let rootDirectoryBytes: UInt64
+        if excludedComponents.isEmpty {
             targets = [url]
+            rootDirectoryBytes = 0
         } else {
-            let excluded = Set(excludingNames)
-            targets = try FileManager.default.contentsOfDirectory(
+            let selection = try directoryAggregateSelection(
                 at: url,
-                includingPropertiesForKeys: nil,
-                options: []
-            ).filter { !excluded.contains($0.lastPathComponent) }
-            var rootStat = stat()
-            if lstat(url.path, &rootStat) == 0 {
-                rootDirectoryBytes = UInt64(max(0, rootStat.st_blocks))
-                    .multipliedClamped(by: 512)
-            }
+                excluding: excludedComponents,
+                fileManager: FileManager()
+            )
+            targets = selection.targets
+            rootDirectoryBytes = selection.directoryAllocatedBytes
         }
         guard !targets.isEmpty else { return rootDirectoryBytes }
 
@@ -490,6 +530,65 @@ public actor StorageAnalyzer {
             }
             return total.addingClamped(blocks.multipliedClamped(by: 1_024))
         }
+    }
+
+    private nonisolated static func normalizedRelativePathComponents(
+        _ path: String
+    ) -> [String]? {
+        let components = path.split(separator: "/").map(String.init)
+        guard !components.isEmpty,
+              components.allSatisfy({ $0 != "." && $0 != ".." }) else {
+            return nil
+        }
+        return components
+    }
+
+    private nonisolated static func directoryAggregateSelection(
+        at directory: URL,
+        excluding paths: [[String]],
+        fileManager: FileManager
+    ) throws -> (targets: [URL], directoryAllocatedBytes: UInt64) {
+        var directoryStat = stat()
+        guard lstat(directory.path, &directoryStat) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        var directoryAllocatedBytes = UInt64(max(0, directoryStat.st_blocks))
+            .multipliedClamped(by: 512)
+        let exclusionsByChild = Dictionary(grouping: paths, by: { $0[0] })
+        let children = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: []
+        )
+        var targets: [URL] = []
+        for child in children {
+            guard let exclusions = exclusionsByChild[child.lastPathComponent] else {
+                targets.append(child)
+                continue
+            }
+            if exclusions.contains(where: { $0.count == 1 }) {
+                continue
+            }
+            var childStat = stat()
+            guard lstat(child.path, &childStat) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            let childType = childStat.st_mode & S_IFMT
+            guard childType == S_IFDIR else {
+                targets.append(child)
+                continue
+            }
+            let nested = try directoryAggregateSelection(
+                at: child,
+                excluding: exclusions.map { Array($0.dropFirst()) },
+                fileManager: fileManager
+            )
+            targets.append(contentsOf: nested.targets)
+            directoryAllocatedBytes = directoryAllocatedBytes.addingClamped(
+                nested.directoryAllocatedBytes
+            )
+        }
+        return (targets, directoryAllocatedBytes)
     }
 
     private nonisolated static func measure(

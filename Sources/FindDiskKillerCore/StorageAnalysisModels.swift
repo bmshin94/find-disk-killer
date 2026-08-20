@@ -210,6 +210,16 @@ public struct StorageScanConfiguration: Sendable {
     public let includesPrivacyProtectedRepositoryLocations: Bool
     public let providerInventoryEnabled: Bool
     public let discoversCodeRepositories: Bool
+    /// Measures package-manager roots as aggregate entries for the interactive
+    /// storage map, avoiding per-file classification in very large caches.
+    public let packageManagerRootsAggregationOnly: Bool
+    /// Uses one aggregate measurement for AI roots when a dedicated agent scan
+    /// is running in parallel. Detailed attribution remains the agent scanner's
+    /// responsibility while ordinary callers retain the full tree behavior.
+    public let agentRootsAggregationOnly: Bool
+    /// Limits concurrent source workers for production scans. Nil preserves the
+    /// legacy unbounded behavior used by deterministic tests and injected callers.
+    public let maximumConcurrentSources: Int?
 
     public init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -220,7 +230,10 @@ public struct StorageScanConfiguration: Sendable {
         repositorySearchRoots: [URL]? = nil,
         includesPrivacyProtectedRepositoryLocations: Bool = false,
         providerInventoryEnabled: Bool? = nil,
-        discoversCodeRepositories: Bool = true
+        discoversCodeRepositories: Bool = true,
+        maximumConcurrentSources: Int? = nil,
+        agentRootsAggregationOnly: Bool = false,
+        packageManagerRootsAggregationOnly: Bool = false
     ) {
         self.homeDirectory = homeDirectory
         self.workspaceRoots = workspaceRoots
@@ -237,6 +250,9 @@ public struct StorageScanConfiguration: Sendable {
             includesPrivacyProtectedRepositoryLocations
         self.providerInventoryEnabled = providerInventoryEnabled ?? (requestedHome == currentHome)
         self.discoversCodeRepositories = discoversCodeRepositories
+        self.maximumConcurrentSources = maximumConcurrentSources.map { max(1, $0) }
+        self.agentRootsAggregationOnly = agentRootsAggregationOnly
+        self.packageManagerRootsAggregationOnly = packageManagerRootsAggregationOnly
     }
 }
 

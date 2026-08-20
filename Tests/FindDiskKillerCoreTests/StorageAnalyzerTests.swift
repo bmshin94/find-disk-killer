@@ -209,6 +209,45 @@ struct StorageAnalyzerTests {
         })
     }
 
+    @Test func aggregateAgentRootsExcludeNestedCacheRootsWithoutChangingBytes() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile(".codex/state_5.sqlite", byteCount: 8_192)
+        try fixture.writeFile(".codex/cache/download.bin", byteCount: 16_384)
+
+        let exact = try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home
+        )).scan(sourceID: .codex)
+        let aggregate = try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home,
+            agentRootsAggregationOnly: true
+        )).scan(sourceID: .codex)
+        let exactCodex = try #require(exact.result(for: .codex))
+        let aggregateCodex = try #require(aggregate.result(for: .codex))
+
+        #expect(aggregateCodex.allocatedBytes == exactCodex.allocatedBytes)
+        #expect(aggregateCodex.entryCount == 2)
+    }
+
+    @Test func packageManagerAggregateModeKeepsBytesWithoutPerFileEntries() async throws {
+        let fixture = try StorageFixture()
+        defer { fixture.remove() }
+        try fixture.writeFile(".npm/cache/package.tgz", byteCount: 16_384)
+
+        let exact = try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home
+        )).scan(sourceID: .npm)
+        let aggregate = try await StorageAnalyzer(configuration: .init(
+            homeDirectory: fixture.home,
+            packageManagerRootsAggregationOnly: true
+        )).scan(sourceID: .npm)
+        let exactNPM = try #require(exact.result(for: .npm))
+        let aggregateNPM = try #require(aggregate.result(for: .npm))
+
+        #expect(aggregateNPM.allocatedBytes == exactNPM.allocatedBytes)
+        #expect(aggregateNPM.entryCount == 1)
+    }
+
     @Test func catalogDetectsVSCodeAsADeveloperToolWithSeparatedStorageRoots() throws {
         let fixture = try StorageFixture()
         defer { fixture.remove() }

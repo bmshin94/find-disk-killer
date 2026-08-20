@@ -128,6 +128,7 @@ final class AgentStorageModel {
         let configuration = AgentStorageScanner.Configuration(
             additionalRoots: customRoots,
             includesDesktopData: true,
+            maximumConcurrentProviders: 1,
             agentDataLocations: locationRepository.locations()
         )
         progress = AgentStorageScanProgress(phase: .discoveringSources)
@@ -187,6 +188,7 @@ final class AgentStorageModel {
             additionalRoots: customRoots,
             includesDesktopData: true,
             providers: [provider],
+            maximumConcurrentProviders: 1,
             agentDataLocations: locationRepository.locations()
         )
         providerScanTasks[provider] = Task { [weak self] in

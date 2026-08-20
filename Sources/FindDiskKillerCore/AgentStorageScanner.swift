@@ -59,6 +59,7 @@ public actor AgentStorageScanner {
         public let includesDesktopData: Bool
         public let environment: [String: String]
         public let providers: Set<AgentStorageProvider>
+        public let maximumConcurrentProviders: Int?
         let beforePhysicalValidation: (@Sendable () -> Void)?
         let databaseReadConcurrency: Int
         let databaseShardDidStart: (@Sendable (String) -> Void)?
@@ -68,6 +69,7 @@ public actor AgentStorageScanner {
             additionalRoots: [URL] = [],
             includesDesktopData: Bool = true,
             providers: Set<AgentStorageProvider> = Set(AgentStorageProvider.allCases),
+            maximumConcurrentProviders: Int? = nil,
             agentDataLocations: [AgentDataLocation]? = nil,
             environment: [String: String]? = nil
         ) {
@@ -77,6 +79,7 @@ public actor AgentStorageScanner {
             self.includesDesktopData = includesDesktopData
             self.environment = Self.environment(environment, for: homeDirectory)
             self.providers = providers
+            self.maximumConcurrentProviders = maximumConcurrentProviders.map { max(1, $0) }
             beforePhysicalValidation = nil
             databaseReadConcurrency = Self.defaultDatabaseReadConcurrency
             databaseShardDidStart = nil
@@ -96,6 +99,7 @@ public actor AgentStorageScanner {
             self.includesDesktopData = includesDesktopData
             self.environment = Self.environment(environment, for: homeDirectory)
             providers = Set(AgentStorageProvider.allCases)
+            maximumConcurrentProviders = nil
             self.beforePhysicalValidation = beforePhysicalValidation
             databaseReadConcurrency = Self.defaultDatabaseReadConcurrency
             databaseShardDidStart = nil
@@ -116,6 +120,7 @@ public actor AgentStorageScanner {
             self.includesDesktopData = includesDesktopData
             self.environment = Self.environment(environment, for: homeDirectory)
             providers = Set(AgentStorageProvider.allCases)
+            maximumConcurrentProviders = nil
             beforePhysicalValidation = nil
             self.databaseReadConcurrency = max(1, databaseReadConcurrency)
             self.databaseShardDidStart = databaseShardDidStart
@@ -310,8 +315,15 @@ private struct AgentStorageScanEngine {
             action: configuration.beforePhysicalValidation
         )
 
+        let providers = AgentStorageProvider.allCases.filter(configuration.providers.contains)
         try await withThrowingTaskGroup(of: AgentStorageProviderScanResult.self) { group in
-            for provider in AgentStorageProvider.allCases where configuration.providers.contains(provider) {
+            var iterator = providers.makeIterator()
+            let workerCount = min(
+                configuration.maximumConcurrentProviders ?? providers.count,
+                providers.count
+            )
+            func scheduleNextProvider() {
+                guard let provider = iterator.next() else { return }
                 group.addTask {
                     var providerEngine = AgentStorageScanEngine(
                         configuration: configuration,
@@ -326,9 +338,13 @@ private struct AgentStorageScanEngine {
                     return AgentStorageProviderScanResult(engine: providerEngine)
                 }
             }
-            for try await result in group {
+            for _ in 0..<workerCount {
+                scheduleNextProvider()
+            }
+            while let result = try await group.next() {
                 try Task.checkCancellation()
                 merge(result.engine)
+                scheduleNextProvider()
             }
         }
 
@@ -568,6 +584,7 @@ private struct AgentStorageScanEngine {
                 provider: requestedProvider,
                 kind: ScanScopeKind(location.kind),
                 root: resolved,
+                rootPath: resolved.path,
                 displayName: location.displayName
             ))
             sources.append(AgentStorageSource(
@@ -1466,12 +1483,12 @@ private struct AgentStorageScanEngine {
                         .compactMap(normalizedUUID)
                     let matches = Set(nativeIDs.flatMap { targetsByNativeID[$0] ?? [] })
                     guard matches.count == 1, let target = matches.first else { continue }
-                    claudeDesktopPathTargets[url.standardizedFileURL.path] = target
+                    registerClaudeDesktopTarget(url, target: target)
                     let sibling = url.deletingPathExtension()
                     var siblingStat = stat()
                     if lstat(sibling.path, &siblingStat) == 0,
                        (siblingStat.st_mode & S_IFMT) == S_IFDIR {
-                        claudeDesktopPathTargets[sibling.standardizedFileURL.path] = target
+                        registerClaudeDesktopTarget(sibling, target: target)
                     }
                 }
             }
@@ -1593,7 +1610,7 @@ private struct AgentStorageScanEngine {
     private mutating func scanPhysicalScope(_ scope: ScanScope, excluding exclusions: Set<String>) {
         var rootStat = stat()
         if lstat(scope.root.path, &rootStat) == 0 {
-            recordPhysicalEntry(url: scope.root, stat: rootStat, scope: scope)
+            recordPhysicalEntry(path: scope.rootPath, stat: rootStat, scope: scope)
             measuredEntryCount += 1
         } else {
             recordSkipped(provider: scope.provider)
@@ -1618,12 +1635,13 @@ private struct AgentStorageScanEngine {
         for case let url as URL in enumerator {
             count += 1
             if count.isMultiple(of: 128), Task.isCancelled { return }
-            if exclusions.contains(url.standardizedFileURL.path) {
+            let path = url.path
+            if exclusions.contains(path) {
                 enumerator.skipDescendants()
                 continue
             }
             var fileStat = stat()
-            guard lstat(url.path, &fileStat) == 0 else {
+            guard lstat(path, &fileStat) == 0 else {
                 recordSkipped(provider: scope.provider)
                 continue
             }
@@ -1631,7 +1649,7 @@ private struct AgentStorageScanEngine {
             if fileType == S_IFLNK {
                 enumerator.skipDescendants()
             }
-            recordPhysicalEntry(url: url, stat: fileStat, scope: scope)
+            recordPhysicalEntry(path: path, stat: fileStat, scope: scope)
             measuredEntryCount += 1
             if measuredEntryCount.isMultiple(of: 256) {
                 reportProgress(
@@ -1648,7 +1666,11 @@ private struct AgentStorageScanEngine {
         }
     }
 
-    private mutating func recordPhysicalEntry(url: URL, stat fileStat: stat, scope: ScanScope) {
+    private mutating func recordPhysicalEntry(
+        path: String,
+        stat fileStat: stat,
+        scope: ScanScope
+    ) {
         let identity = FileIdentity(
             device: UInt64(fileStat.st_dev),
             inode: UInt64(fileStat.st_ino)
@@ -1662,9 +1684,9 @@ private struct AgentStorageScanEngine {
             timeIntervalSince1970: TimeInterval(fileStat.st_mtimespec.tv_sec)
                 + TimeInterval(fileStat.st_mtimespec.tv_nsec) / 1_000_000_000
         )
-        let claim = classify(url: url, scope: scope)
+        let claim = classify(path: path, scope: scope)
         let observation = FileObservation(
-            path: url.path,
+            path: path,
             signature: FileStatSignature(fileStat),
             fileType: fileStat.st_mode & S_IFMT,
             provider: scope.provider
@@ -1750,36 +1772,36 @@ private struct AgentStorageScanEngine {
         )
     }
 
-    private func classify(url: URL, scope: ScanScope) -> PhysicalClaim {
-        let relative = relativePath(of: url, under: scope.root)
+    private func classify(path: String, scope: ScanScope) -> PhysicalClaim {
+        let relative = relativePath(of: path, under: scope.rootPath)
         let components = relative.split(separator: "/").map(String.init)
         switch scope.kind {
         case .rebuildableCache:
-            return claim(scope, url.path, .global(.cache), .other)
+            return claim(scope, path, .global(.cache), .other)
         case .codexHome:
             return classifyCodex(
-                path: url.path,
+                path: path,
                 relativePath: relative,
                 components: components,
                 scope: scope
             )
         case .claudeCode, .claudeDesktopAgent:
             return classifyClaude(
-                path: url.path,
+                path: path,
                 relativePath: relative,
                 components: components,
                 scope: scope
             )
         case .openCode:
             return classifyOpenCode(
-                path: url.path,
+                path: path,
                 relativePath: relative,
                 components: components,
                 scope: scope
             )
         case .codexDesktop:
             return desktopClaim(
-                path: url.path,
+                path: path,
                 relativePath: relative,
                 components: components,
                 scope: scope,
@@ -1787,7 +1809,7 @@ private struct AgentStorageScanEngine {
             )
         case .claudeDesktop:
             return desktopClaim(
-                path: url.path,
+                path: path,
                 relativePath: relative,
                 components: components,
                 scope: scope,
@@ -1992,14 +2014,21 @@ private struct AgentStorageScanEngine {
     }
 
     private func claudeDesktopTarget(for path: String) -> ThreadTarget? {
-        var candidate = URL(fileURLWithPath: path).standardizedFileURL.path
+        var candidate = path
         while !candidate.isEmpty {
             if let target = claudeDesktopPathTargets[candidate] { return target }
-            let parent = URL(fileURLWithPath: candidate).deletingLastPathComponent().path
-            if parent == candidate { break }
-            candidate = parent
+            guard let separator = candidate.lastIndex(of: "/") else { break }
+            candidate.removeSubrange(separator...)
         }
         return nil
+    }
+
+    private mutating func registerClaudeDesktopTarget(
+        _ url: URL,
+        target: ThreadTarget
+    ) {
+        claudeDesktopPathTargets[url.standardizedFileURL.path] = target
+        claudeDesktopPathTargets[canonicalURL(url).path] = target
     }
 
     private func claim(
@@ -3023,10 +3052,7 @@ private struct AgentStorageScanEngine {
             let displayPath = draft.absolutePaths.sorted().first
             let displayRelativePath = displayPath.flatMap { path in
                 guard let source else { return URL(fileURLWithPath: path).lastPathComponent }
-                return relativePath(
-                    of: URL(fileURLWithPath: path),
-                    under: URL(fileURLWithPath: source.path, isDirectory: true)
-                )
+                return relativePath(of: path, under: source.path)
             }
             return AgentStorageDiagnostic(
                 id: key.stableID,
@@ -3057,10 +3083,9 @@ private struct AgentStorageScanEngine {
                     impact: .physicalMeasurement,
                     affectedAllocatedBytes: entry.allocatedBytes,
                     relativePath: relativePath(
-                        of: URL(fileURLWithPath: observation.path),
-                        under: URL(fileURLWithPath: sources.first(where: {
-                            $0.id == claim.sourceID
-                        })?.path ?? observation.path, isDirectory: true)
+                        of: observation.path,
+                        under: sources.first(where: { $0.id == claim.sourceID })?.path
+                            ?? observation.path
                     )
                 ))
             }
@@ -3283,6 +3308,7 @@ private struct ScanScope: Sendable {
     let provider: AgentStorageProvider
     let kind: ScanScopeKind
     let root: URL
+    let rootPath: String
     let displayName: String
 }
 
@@ -4707,9 +4733,15 @@ private enum CodexRolloutTitleReader {
 }
 
 private func parseISO8601Date(_ value: String) -> Date? {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.date(from: value)
+    try? AgentStorageISO8601Style.parse(value)
+}
+
+private enum AgentStorageISO8601Style {
+    static let format = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+
+    static func parse(_ value: String) throws -> Date {
+        try format.parse(value)
+    }
 }
 
 private struct ClaudeAgentMetadata: Sendable {
@@ -4741,9 +4773,7 @@ private func stableNodeID(familyID: String, nativeID: String) -> String {
     "\(familyID)|node|\(nativeID)"
 }
 
-private func relativePath(of url: URL, under root: URL) -> String {
-    let rootPath = root.standardizedFileURL.path
-    let path = url.standardizedFileURL.path
+private func relativePath(of path: String, under rootPath: String) -> String {
     guard path != rootPath, path.hasPrefix(rootPath + "/") else { return "" }
     return String(path.dropFirst(rootPath.count + 1))
 }

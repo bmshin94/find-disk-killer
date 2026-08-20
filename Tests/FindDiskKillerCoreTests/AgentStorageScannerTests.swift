@@ -1507,6 +1507,29 @@ import Testing
     #expect(probe.providers == Set(AgentStorageProvider.allCases))
 }
 
+@Test func agentStorageProviderConcurrencyCanBeCappedForProductionScans() async throws {
+    let root = makeTemporaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(
+        at: root.appending(path: ".codex/sessions", directoryHint: .isDirectory),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: root.appending(path: ".claude/projects", directoryHint: .isDirectory),
+        withIntermediateDirectories: true
+    )
+    let probe = AgentStorageProviderConcurrencyProbe()
+
+    _ = try await AgentStorageScanner(configuration: .init(
+        homeDirectory: root,
+        includesDesktopData: false,
+        maximumConcurrentProviders: 1
+    )).scan { probe.observe($0) }
+
+    #expect(!probe.didOverlap)
+    #expect(probe.providers == Set(AgentStorageProvider.allCases))
+}
+
 private final class AgentStorageProgressRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [AgentStorageScanProgress] = []
